@@ -2,3 +2,4 @@
 %project=garnix
 
 init 2026-05-20T00:00:00Z Julian K. Arni <julian.arni@artificial.io> # Initialize tables
+multi_forge [init] 2026-06-13T00:00:00Z Julian K. Arni <julian.arni@artificial.io> # Add forge_type dimension to repo/owner tables
