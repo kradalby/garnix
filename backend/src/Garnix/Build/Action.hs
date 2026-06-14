@@ -129,10 +129,10 @@ validateApplication (Nix.AppExecPath path) = do
     $ throw
     $ ActionPreconditionFileExists path
 
-ensureAllowedSandboxType :: GhRepoOwner -> Action -> M ()
+ensureAllowedSandboxType :: RepoOwner -> Action -> M ()
 ensureAllowedSandboxType owner actionConfig = do
   when
-    ( T.toLower (getGhLogin $ getGhRepoOwner owner)
+    ( T.toLower (getForgeLogin $ getRepoOwner owner)
         `notElem` allowedSharedResourcesUsers
         && actionConfig
         ^. sandboxType == SharedResources

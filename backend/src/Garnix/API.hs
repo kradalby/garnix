@@ -11,6 +11,7 @@ import Garnix.API.Commits
 import Garnix.API.ConfigSchema (garnixConfigJsonSchema)
 import Garnix.API.Dev (DevAPI, devAPI)
 import Garnix.API.GhWebhooks
+import Garnix.API.GiteaWebhooks
 import Garnix.API.Health
 import Garnix.API.Hosts
 import Garnix.API.Keys
@@ -18,6 +19,7 @@ import Garnix.API.Modules
 import Garnix.API.Runs (RunAPI, runAPI)
 import Garnix.API.Stripe (StripeWebhookAPI, stripeWebhookAPI)
 import Garnix.DB qualified as DB
+import Garnix.Forge.Types (githubAppConfigName)
 import Garnix.Monad
 import Garnix.Prelude
 import Garnix.Types
@@ -36,6 +38,7 @@ data WholeAPI r = WholeAPI
           :> "events"
           :> ( "github" :> ToServantApi GhWebhookAPI
                  :<|> "stripe" :> StripeWebhookAPI
+                 :<|> "gitea" :> ToServantApi GiteaWebhookAPI
              ),
     account :: r :- "api" :> "account" :> Auth '[JWT, Cookie] AuthJwtPayload :> ToServantApi AccountAPI,
     build :: r :- "api" :> "build" :> Auth '[JWT, Cookie] AuthJwtPayload :> ToServantApi BuildAPI,
@@ -44,14 +47,14 @@ data WholeAPI r = WholeAPI
     modules :: r :- "api" :> "modules" :> Auth '[JWT, Cookie] AuthJwtPayload :> ToServantApi ModulesAPI,
     dev :: r :- "api" :> "dev" :> ToServantApi DevAPI,
     hosts :: r :- "api" :> "hosts" :> ToServantApi HostsAPI,
-    keys :: r :- "api" :> "keys" :> Capture "owner" GhRepoOwner :> Capture "repo" GhRepoName :> "repo-key.public" :> Get '[PlainText] PublicKey,
-    actionKeys :: r :- "api" :> "keys" :> Capture "owner" GhRepoOwner :> Capture "repo" GhRepoName :> "actions" :> Capture "action" PackageName :> "key.public" :> Get '[PlainText] PublicKey,
+    keys :: r :- "api" :> "keys" :> Capture "owner" RepoOwner :> Capture "repo" RepoName :> "repo-key.public" :> Get '[PlainText] PublicKey,
+    actionKeys :: r :- "api" :> "keys" :> Capture "owner" RepoOwner :> Capture "repo" RepoName :> "actions" :> Capture "action" PackageName :> "key.public" :> Get '[PlainText] PublicKey,
     login :: r :- "api" :> "login" :> ToServantApi LoginAPI,
     signup :: r :- "api" :> "signup" :> ToServantApi SignupAPI,
     whoami :: r :- "api" :> "whoami" :> Auth '[JWT, Cookie] AuthJwtPayload :> Get '[JSON] (Maybe UserDto),
     authJwt :: r :- "api" :> "auth" :> "jwt" :> ToServantApi AuthJwtAPI,
     config :: r :- "api" :> "config" :> Get '[JSON] FrontendConfig,
-    badges :: r :- "api" :> "badges" :> Capture "owner" GhRepoOwner :> Capture "repo" GhRepoName :> QueryParam "branch" Branch :> Get '[JSON] Badge,
+    badges :: r :- "api" :> "badges" :> Capture "owner" RepoOwner :> Capture "repo" RepoName :> QueryParam "branch" Branch :> Get '[JSON] Badge,
     waitlist :: r :- "api" :> "waitlist" :> ReqBody '[JSON] Email :> Post '[JSON] (),
     cache :: r :- "api" :> "cache" :> ToServantApi CacheAPI,
     garnixConfigSchema :: r :- "api" :> "garnix-config-schema.json" :> Get '[JSON] JSONSchema,
@@ -73,7 +76,7 @@ data ProjectAPI r = ProjectAPI
           :> Capture "gh_repo" Text
           :> "commit"
           :> Capture "commit" CommitHash
-          :> QueryParam "token" GhToken
+          :> QueryParam "token" ForgeToken
           :> Post '[JSON] RunResult
   }
   deriving stock (Generic)
@@ -81,7 +84,7 @@ data ProjectAPI r = ProjectAPI
 wholeAPI :: WholeAPI (AsServerT M)
 wholeAPI =
   WholeAPI
-    { events = toServant ghWebhookAPI :<|> stripeWebhookAPI,
+    { events = toServant ghWebhookAPI :<|> stripeWebhookAPI :<|> toServant giteaWebhookAPI,
       account = toServant . accountAPI,
       dev = devAPI,
       login = toServant loginAPI,
@@ -105,7 +108,7 @@ wholeAPI =
 
 getConfig :: M FrontendConfig
 getConfig = do
-  ghAppName <- view #githubAppName
+  ghAppName <- githubAppConfigName <$> githubAppConfig
   pure $ FrontendConfig {_frontendConfigGithubAppName = ghAppName}
 
 waitlistAPI :: Email -> M ()

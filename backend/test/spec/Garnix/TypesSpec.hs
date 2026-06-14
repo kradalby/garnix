@@ -26,7 +26,7 @@ spec = describe "Types" $ do
                     _userCreatedAt = now
                   }
               )
-              (GhToken "tok")
+              (ForgeToken "tok")
 
       toJSON jwtPayload
         `shouldBe` [aesonQQ|
@@ -64,7 +64,7 @@ spec = describe "Types" $ do
                     _userCreatedAt = now
                   }
               )
-              (GhToken "tok")
+              (ForgeToken "tok")
           )
 
   describe "asPackageType" $ do

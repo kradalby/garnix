@@ -15,16 +15,16 @@ import Garnix.Types
 
 type GetRepoAndModuleValues =
   Rec
-    ( "repo_user" .== Maybe GhRepoOwner
-        .+ "repo_name" .== Maybe GhRepoName
+    ( "repo_user" .== Maybe RepoOwner
+        .+ "repo_name" .== Maybe RepoName
         .+ "user_config" .== [ModuleValue]
         .+ "modules" .== [Module]
     )
 
 type UpdateRepoModuleValues =
   Rec
-    ( "repo_user" .== Maybe GhRepoOwner
-        .+ "repo_name" .== Maybe GhRepoName
+    ( "repo_user" .== Maybe RepoOwner
+        .+ "repo_name" .== Maybe RepoName
         .+ "user_config" .== [ModuleValue]
     )
 
@@ -38,8 +38,8 @@ type ModuleValue =
 type Module =
   Rec
     ( "name" .== Text
-        .+ "repo_user" .== GhRepoOwner
-        .+ "repo_name" .== GhRepoName
+        .+ "repo_user" .== RepoOwner
+        .+ "repo_name" .== RepoName
         .+ "git_commit" .== CommitHash
         .+ "schema" .== JSON.Value
         .+ "description" .== Maybe Text
@@ -83,8 +83,8 @@ newtype NixIdentifier = NixIdentifier {getNixIdentifier :: Text}
   deriving newtype (FromJSONKey, ToJSONKey)
 
 data GithubRepository = GithubRepository
-  { repoUser :: GhRepoOwner,
-    repoName :: GhRepoName
+  { repoUser :: RepoOwner,
+    repoName :: RepoName
   }
   deriving stock (Eq, Ord, Generic, Show)
   deriving (FromJSON, ToJSON)
@@ -142,7 +142,7 @@ instance ToJSON NixValue where
             "value" .= value
           ]
 
-get :: GhLogin -> M (Maybe GetRepoAndModuleValues)
+get :: ForgeLogin -> M (Maybe GetRepoAndModuleValues)
 get ghLogin =
   DB.pgQuery
     [pgSQL|
@@ -207,7 +207,7 @@ get ghLogin =
                 .+ #description .== description
           )
 
-update :: GhLogin -> UpdateRepoModuleValues -> M ()
+update :: ForgeLogin -> UpdateRepoModuleValues -> M ()
 update ghLogin row = do
   let repo_user = row ^. #repo_user
       repo_name = row ^. #repo_name
@@ -267,7 +267,7 @@ update ghLogin row = do
                         )
                     |]
 
-delete :: GhLogin -> M ()
+delete :: ForgeLogin -> M ()
 delete ghLogin = do
   void
     $ DB.pgExec

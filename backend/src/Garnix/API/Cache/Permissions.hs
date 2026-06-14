@@ -18,7 +18,7 @@ data Permission
   | Disallowed
   deriving (Eq, Ord, Show)
 
-getRepoPermissions :: (HasCallStack) => Maybe GhLogin -> GhRepoOwner -> GhRepoName -> M Permission
+getRepoPermissions :: (HasCallStack) => Maybe ForgeLogin -> RepoOwner -> RepoName -> M Permission
 getRepoPermissions mUser owner repo =
   lookupCache __getRepoPermissionsCache (mUser, owner, repo)
     $ withTextSpans
@@ -53,7 +53,7 @@ getRepoPermissions mUser owner repo =
               RepoNotFound -> do
                 log Warning "Repository not found, denying access"
                 pure Disallowed
-              GhCollaborators collaborators ->
+              Collaborators collaborators ->
                 if user `elem` collaborators
                   then do
                     log Informational "User is a collaborator to the repository, allowing"
@@ -62,7 +62,7 @@ getRepoPermissions mUser owner repo =
                     log Notice "Access to disallowed resource. Blocking."
                     pure Disallowed
 
-type GithubPermissionCache = ExpiringCache (Maybe GhLogin, GhRepoOwner, GhRepoName) Permission
+type GithubPermissionCache = ExpiringCache (Maybe ForgeLogin, RepoOwner, RepoName) Permission
 
 {-# NOINLINE __getRepoPermissionsCache #-}
 __getRepoPermissionsCache :: GithubPermissionCache

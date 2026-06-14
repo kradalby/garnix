@@ -17,6 +17,7 @@ import Garnix.Monad
 import Garnix.Monad.Async (resolve)
 import Garnix.Prelude
 import Garnix.Reporters.OpenSearchReporter (openSearchReporter)
+import Garnix.TestHelpers.GithubInterface.Internal (fakeRepoInfo)
 import Garnix.TestHelpers
   ( addNixExperimentalFeatures,
     fromSingleton,
@@ -44,7 +45,7 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ do
       describe "/api/build/{id}" $ do
         describe "collaborators" $ do
           it "shows builds to collaborators even if they didn't start the build"
-            $ withGithubMock repoCollaboratorsLens (\_ _ _ -> pure $ GhCollaborators ["dev-user"])
+            $ withGithubMock repoCollaboratorsLens (\_ _ _ -> pure $ Collaborators ["dev-user"])
             $ do
               withServer $ \testServer -> do
                 now <- liftIO getCurrentTime
@@ -130,12 +131,7 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ do
                 { _commitInfoReqUser = undefined,
                   _commitInfoRepoPublicity = RepoIsPublic True,
                   _commitInfoRepoInfo =
-                    RepoInfo
-                      { _repoInfoInstallationAuth = undefined,
-                        _repoInfoGhToken = undefined,
-                        _repoInfoGhRepoOwner = "owner",
-                        _repoInfoGhRepoName = "repo"
-                      },
+                    fakeRepoInfo "owner" "repo",
                   _commitInfoBranch = Just $ Branch "test-branch",
                   _commitInfoPrFromFork = Nothing,
                   _commitInfoCommit = undefined
@@ -300,12 +296,7 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ do
                 { _commitInfoReqUser = undefined,
                   _commitInfoRepoPublicity = RepoIsPublic True,
                   _commitInfoRepoInfo =
-                    RepoInfo
-                      { _repoInfoInstallationAuth = undefined,
-                        _repoInfoGhToken = undefined,
-                        _repoInfoGhRepoOwner = "owner",
-                        _repoInfoGhRepoName = "repo"
-                      },
+                    fakeRepoInfo "owner" "repo",
                   _commitInfoBranch = Just $ Branch "test-branch",
                   _commitInfoPrFromFork = Nothing,
                   _commitInfoCommit = undefined
@@ -384,6 +375,6 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ do
           b <- testBuild $ (gitCommit .~ "aaaaaa") . (startTime .~ parseTimestamp "2010-03-04T01:00:00Z") . (reqUser .~ "some random user")
           updateBuild user (b ^. id) cancelBuild `shouldThrowM` NoSuchBuild (b ^. id)
 
-testUser :: GhLogin -> Email -> M User
+testUser :: ForgeLogin -> Email -> M User
 testUser ghLogin email =
   DB.newUser ghLogin email FreeSubscription True

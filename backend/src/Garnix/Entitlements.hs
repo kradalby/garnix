@@ -49,10 +49,10 @@ fallbackEvaluationTimeout = 30
 fallbackBuildTimeout :: Int16
 fallbackBuildTimeout = 120
 
-addDefaultEntitlements :: GhRepoOwner -> M ()
+addDefaultEntitlements :: RepoOwner -> M ()
 addDefaultEntitlements owner = addProduct owner defaultPlanName
 
-addProduct :: GhRepoOwner -> Text -> M ()
+addProduct :: RepoOwner -> Text -> M ()
 addProduct owner product = do
   void
     $ DB.pgExec
@@ -64,7 +64,7 @@ addProduct owner product = do
         ON CONFLICT DO NOTHING
       |]
 
-addProductByPriceId :: GhRepoOwner -> StripeLib.PriceId -> M ()
+addProductByPriceId :: RepoOwner -> StripeLib.PriceId -> M ()
 addProductByPriceId owner priceId = do
   res :: [Text] <-
     DB.pgQuery
@@ -86,7 +86,7 @@ data Hosting = Hosting
   }
   deriving (Eq, Show, Generic)
 
-getHosting :: GhRepoOwner -> M Hosting
+getHosting :: RepoOwner -> M Hosting
 getHosting repoOwner = do
   hosts :: [(Maybe Int64, Maybe Int64, Maybe Bool)] <-
     DB.pgQuery
@@ -117,7 +117,7 @@ getHosting repoOwner = do
           }
     _ : _ : _ -> throw $ OtherError "impossible: more than one result from aggregate query"
 
-queryCiTimeEntitlements :: GhRepoOwner -> M Duration
+queryCiTimeEntitlements :: RepoOwner -> M Duration
 queryCiTimeEntitlements repoOwner = do
   extraCiMinutesResult :: [Int32] <-
     DB.pgQuery
@@ -146,7 +146,7 @@ queryCiTimeEntitlements repoOwner = do
     _ : _ : _ -> throw $ OtherError "impossible: more than one result from aggregate query"
   pure $ planMinutes `addDuration` extraCiTime
 
-hasRemainingCiTime :: GhRepoOwner -> M Bool
+hasRemainingCiTime :: RepoOwner -> M Bool
 hasRemainingCiTime owner = do
   total <- queryCiTimeEntitlements owner
   used <- DB.getCurrentMonthUsage owner
@@ -203,17 +203,17 @@ mergePlans allPlans = case filter (isJust . snd) allPlans of
                 _productPlanIsPaid = (a ^. isPaid) || (b ^. isPaid)
               }
 
-getPlan :: GhRepoOwner -> M ProductPlan
+getPlan :: RepoOwner -> M ProductPlan
 getPlan repoOwner =
   Map.lookup repoOwner <$> getPlans [repoOwner] >>= \case
-    Nothing -> throw $ OtherError $ "Impossible: no plan found for " <> getGhLogin (getGhRepoOwner repoOwner)
+    Nothing -> throw $ OtherError $ "Impossible: no plan found for " <> getForgeLogin (getRepoOwner repoOwner)
     Just plan -> pure plan
 
-getPlans :: [GhRepoOwner] -> M (Map GhRepoOwner ProductPlan)
+getPlans :: [RepoOwner] -> M (Map RepoOwner ProductPlan)
 getPlans orgs = do
   forM_ orgs addDefaultEntitlements
   res ::
-    [ ( GhRepoOwner,
+    [ ( RepoOwner,
         Text,
         Maybe Text,
         Maybe Text,
@@ -405,7 +405,7 @@ getPlanByName planName = do
     [] -> pure Nothing
     _ -> throw $ OtherError $ "Impossible: more than one plan with name " <> planName
 
-setExtraUsageLimits :: GhRepoOwner -> ExtraUsageLimits -> M ()
+setExtraUsageLimits :: RepoOwner -> ExtraUsageLimits -> M ()
 setExtraUsageLimits owner newLimits = do
   let extraCiMinutes :: Int32 = floor $ toMinutes $ newLimits ^. #ciTime
   let extraPrMinutes :: Int32 = floor $ toMinutes $ newLimits ^. #prDeployTime
@@ -424,7 +424,7 @@ setExtraUsageLimits owner newLimits = do
             extra_hosting_spending_limit_in_usd = ${extraHostingSpendInUsd}
       |]
 
-getExtraUsageLimits :: GhRepoOwner -> M ExtraUsageLimits
+getExtraUsageLimits :: RepoOwner -> M ExtraUsageLimits
 getExtraUsageLimits owner = do
   result <-
     map

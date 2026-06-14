@@ -27,7 +27,7 @@ getStoreHashPermission storeHash authorization = do
     Just (Left err) -> do
       throw $ UnauthorizedWithMessage $ "Failed to parse basic auth: " <> show err
     Just (Right (user, pass)) -> do
-      let ghLogin = GhLogin user
+      let ghLogin = ForgeLogin user
       isValid <- isAccessTokenValidCached storeHash ghLogin $ AccessToken pass
       unless isValid $ throw InvalidAccessToken
       pure $ Just ghLogin
@@ -40,7 +40,7 @@ getStoreHashPermission storeHash authorization = do
           getRepoPermissions mGhLogin repoOwner repoName
         pure $ if Allowed `elem` permissions then Allowed else Disallowed
   where
-    isAccessTokenValidCached :: StoreHash -> GhLogin -> AccessToken -> M Bool
+    isAccessTokenValidCached :: StoreHash -> ForgeLogin -> AccessToken -> M Bool
     isAccessTokenValidCached storeHash ghLogin accessToken =
       lookupCache __accessTokenValidCache (ghLogin, accessToken) $ do
         (InternalCacheToken internalToken) <- DB.getUserInternalToken ghLogin
@@ -56,7 +56,7 @@ getStoreHashPermission storeHash authorization = do
                 throw InvalidAccessToken
             isAccessTokenValid userId accessToken (^. #cache)
 
-type AccessTokenValidCache = ExpiringCache (GhLogin, AccessToken) Bool
+type AccessTokenValidCache = ExpiringCache (ForgeLogin, AccessToken) Bool
 
 {-# NOINLINE __accessTokenValidCache #-}
 __accessTokenValidCache :: AccessTokenValidCache

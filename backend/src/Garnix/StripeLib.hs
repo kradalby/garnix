@@ -20,7 +20,7 @@ import Network.Wreq qualified as Wreq
 
 testImplementation ::
   IO
-    ( Mock (GhRepoOwner, Name, Email) CustomerDto,
+    ( Mock (RepoOwner, Name, Email) CustomerDto,
       Mock (CustomerId, PriceId, Text, Text) SubscriptionDto,
       Mock (CustomerId, InvoiceId, Text, UnitAmount, Int64) (),
       Mock CustomerId SubscriptionListDto,
@@ -45,7 +45,7 @@ testImplementation = do
             .+ #email
               .== email
             .+ #metadata
-              .== insert "github_account" (getGhLogin $ getGhRepoOwner repoOwner) mempty
+              .== insert "github_account" (getForgeLogin $ getRepoOwner repoOwner) mempty
         )
   now <- getCurrentTime
   subscriptions :: MVar (Int, [SubscriptionId]) <- newMVar (0, mempty)
@@ -110,12 +110,12 @@ testImplementation = do
       )
   pure (createCustomer, createSubscription, createInvoice, listSubscriptions, cancelSubscription, getPrice)
 
-createCustomer :: GhRepoOwner -> Name -> Email -> M CustomerDto
+createCustomer :: RepoOwner -> Name -> Email -> M CustomerDto
 createCustomer = curry3 $ mockable #createCustomerMock $ \(repoOwner, name, email) -> do
   let body :: [FormParam] =
         [ "name" := getName name,
           "email" := getEmail email,
-          "metadata[github_account]" := getGhLogin (getGhRepoOwner repoOwner)
+          "metadata[github_account]" := getForgeLogin (getRepoOwner repoOwner)
         ]
   post "/customers" body
 

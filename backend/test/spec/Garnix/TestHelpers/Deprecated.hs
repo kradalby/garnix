@@ -12,6 +12,7 @@ import Garnix.Monad
 import Garnix.Prelude
 import Garnix.TestHelpers.Common
 import Garnix.TestHelpers.GithubInterface.Deprecated qualified as Deprecated
+import Garnix.TestHelpers.GithubInterface.Internal qualified as Internal
 import Garnix.TestHelpers.HetznerMock
 import Garnix.TestHelpers.Monad (cleanDbConn, githubAppPk)
 import Garnix.TestInstances ()
@@ -102,8 +103,8 @@ withMockRepo flake yaml branch action = do
               env'
                 & #hetznerInterface
                 .~ testHetznerInterface
-                & #githubInterface
-                .~ ghInterface
+                & #forges
+                .~ Internal.githubForgeRegistry ghInterface
                 & #s3CacheEnv
                 .~ error "withMockRepo: mock s3CacheEnv"
         result <- runM env $ do

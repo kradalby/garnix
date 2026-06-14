@@ -7,7 +7,8 @@ import Data.Set qualified as Set
 import Database.PostgreSQL.Typed
 import Database.PostgreSQL.Typed qualified as PSQL
 import Garnix.DB qualified as DB
-import Garnix.Monad (M, throw)
+import Garnix.Monad (CommitInfo (..), M, throw)
+import Garnix.TestHelpers.GithubInterface.Internal (fakeRepoInfo)
 import Garnix.Nix.Types (DrvPath (..), StoreHash (..), StorePath (..))
 import Garnix.Prelude
 import Garnix.TestHelpers (testBuild, truncateDBM)
@@ -25,7 +26,7 @@ spec = do
     it "allows duplicate builds" $ do
       user <-
         DB.newUser
-          (GhLogin "user")
+          (ForgeLogin "user")
           (Email "foo@x.com")
           FreeSubscription
           True
@@ -34,12 +35,7 @@ spec = do
               ( CommitInfo
                   (user ^. githubLogin)
                   (RepoIsPublic True)
-                  ( RepoInfo
-                      undefined
-                      undefined
-                      (GhRepoOwner $ GhLogin "foo")
-                      (GhRepoName "bar")
-                  )
+                  (fakeRepoInfo (RepoOwner $ ForgeLogin "foo") (RepoName "bar"))
                   (Just (Branch "branch/name"))
                   Nothing
                   (CommitHash "baz")
@@ -80,7 +76,7 @@ spec = do
 
   context "getUserInternalToken" $ inM $ beforeM_ truncateDBM $ do
     it "gets the same token when called by multiple threads concurrently" $ do
-      results <- replicateConcurrently 50 (DB.getUserInternalToken $ GhLogin "user")
+      results <- replicateConcurrently 50 (DB.getUserInternalToken $ ForgeLogin "user")
       liftIO $ results `shouldBe` replicate 50 (head results)
 
   context "claimS3CachedStorePaths" $ inM $ beforeM_ truncateDBM $ do

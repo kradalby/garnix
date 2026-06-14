@@ -270,7 +270,7 @@ mkModuleValues moduleNames = do
         ( \moduleName ->
             #name .== moduleName
               .+ #repo_user .== "garnix-io"
-              .+ #repo_name .== GhRepoName (moduleName <> "-module")
+              .+ #repo_name .== RepoName (moduleName <> "-module")
               .+ #git_commit .== CommitHash nodejsModuleHash
               .+ #schema .== JSON.Object JSON.KeyMap.empty
               .+ #description .== Nothing

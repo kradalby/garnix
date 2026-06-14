@@ -68,7 +68,7 @@ mkTestServer session port =
         _ <- get "/api/dev/log-me-in"
         response <- get "/api/whoami"
         let username = response ^. responseBody . key "username" . _String
-        DB.getUser (GhLogin username)
+        DB.getUser (ForgeLogin username)
    in TestServer
         { get,
           put,

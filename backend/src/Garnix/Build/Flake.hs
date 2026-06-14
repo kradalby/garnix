@@ -148,9 +148,8 @@ newBuild reporter commitInfo packageInfo wantsIncrementalism = withSpan packageI
       <?> "Creating a build in the DB"
   withSpan (initialBuild ^. id) $ do
     runReporter <- createNewRun reporter $ ReportBuild (reportNameForBuild initialBuild) initialBuild
-    log Informational $ "My GH run id is: " <> show (Garnix.Monad.ghRunId runReporter)
-    let build = initialBuild & githubRunId .~ Garnix.Monad.ghRunId runReporter
-    DB.reportBuildResultDB build <?> "Adding build github ID to DB"
+    let build = initialBuild
+    DB.reportBuildResultDB build <?> "Persisting build to DB"
     pure (build, runReporter)
 
 setupBuild :: Reporter -> GarnixConfig -> CommitInfo -> Attribute -> M (Build, RunReporter)

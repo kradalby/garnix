@@ -7,6 +7,7 @@ import Garnix.API.Builds.Types
 import Garnix.API.Commits (GetCommit, ListCommits, getCommitsForUser, getSingleCommit)
 import Garnix.Access (Access (..), getBuildWithAccess)
 import Garnix.DB qualified as DB
+import Garnix.GithubInterface (githubRepoInfo)
 import Garnix.Monad
 import Garnix.Orchestrator qualified as Orchestrator
 import Garnix.Prelude
@@ -54,8 +55,8 @@ buildAPI _ =
     }
 
 data SubmitTestBuild = SubmitTestBuild
-  { owner :: GhRepoOwner,
-    repo :: GhRepoName,
+  { owner :: RepoOwner,
+    repo :: RepoName,
     testCommit :: CommitHash
   }
   deriving (Generic)
@@ -74,9 +75,9 @@ submitTestBuild SubmitTestBuild {owner, repo, testCommit} = do
             CommitInfo
               { _commitInfoReqUser = "garnix-io",
                 _commitInfoRepoPublicity = RepoIsPublic False,
-                _commitInfoRepoInfo = RepoInfo iAuth tok owner repo,
+                _commitInfoRepoInfo = githubRepoInfo iAuth tok owner repo,
                 _commitInfoBranch = Nothing,
-                _commitInfoPrFromFork = Just $ PrFromFork $ getGhLogin (getGhRepoOwner owner) <> "/" <> getGhRepoName repo,
+                _commitInfoPrFromFork = Just $ PrFromFork $ getForgeLogin (getRepoOwner owner) <> "/" <> getRepoName repo,
                 _commitInfoCommit = testCommit
               }
       void $ Orchestrator.handleCommit openSearchReporter True commitInfo

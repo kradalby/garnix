@@ -68,8 +68,9 @@ checkAuthorization flakeDir repoConfig commitInfo = do
   inputs <- aesonDecode "output of 'nix flake metadata --json'" _parseFlakeMetaData output
   githubInputs <- checkInputsAllowed curDir inputs
   let repoInfo' = commitInfo ^. repoInfo
-  privateInputs <- filterM (\(GithubFlakeInput owner repo) -> not . isRepoPublic <$> getRepoPublicity (repoInfo' ^. installationAuth) owner repo) githubInputs
-  selfRepoPublicity <- getRepoPublicity (repoInfo' ^. installationAuth) (repoInfo' ^. ghRepoOwner) (repoInfo' ^. ghRepoName)
+  iAuth <- repoInfoGithubAuth repoInfo'
+  privateInputs <- filterM (\(GithubFlakeInput owner repo) -> not . isRepoPublic <$> getRepoPublicity iAuth owner repo) githubInputs
+  selfRepoPublicity <- getRepoPublicity iAuth (repoInfo' ^. ghRepoOwner) (repoInfo' ^. ghRepoName)
   case privateInputs of
     [] -> pure $ NixConfig mempty
     _
@@ -80,26 +81,26 @@ checkAuthorization flakeDir repoConfig commitInfo = do
               $ OtherError
               $ "Public repository has private dependencies, which is not allowed. Private dependencies: "
               <> T.unwords (fmap showPretty privateInputs)
-          pure $ githubAccessTokenNixConfig $ repoInfo' ^. ghToken
+          pure $ githubAccessTokenNixConfig $ repoInfoToken repoInfo'
       | isJust $ commitInfo ^. prFromFork ->
           throw
             $ OtherError
               "Repository has private dependencies, but PR is from fork."
     _ -> do
-      baseRepoCollaborators' <- getRepoCollaborators (repoInfo' ^. installationAuth) (repoInfo' ^. ghRepoOwner) (repoInfo' ^. ghRepoName) <?> "Getting repo collaborators"
+      baseRepoCollaborators' <- getRepoCollaborators iAuth (repoInfo' ^. ghRepoOwner) (repoInfo' ^. ghRepoName) <?> "Getting repo collaborators"
       baseRepoCollaborators <- case baseRepoCollaborators' of
         RepoNotFound -> throw $ OtherError "checkAuthorization: base repo not found"
-        GhCollaborators collaborators -> pure collaborators
+        Collaborators collaborators -> pure collaborators
       forM_ privateInputs $ \privateInput -> do
         when ((repoInfo' ^. ghRepoOwner) /= owner privateInput) $ do
           throw $ OtherError $ showPretty privateInput <> " is private or doesn't exist.\nIf it is private and you would like to use it, see https://garnix.io/docs/private_inputs."
         let skipPrivateInputChecks = repoConfig ^. skipPrivateInputsCheckForCollaborators
         unless skipPrivateInputChecks $ do
           thisInputCollaborators' <-
-            getRepoCollaborators (repoInfo' ^. installationAuth) (repoInfo' ^. ghRepoOwner) (repo privateInput)
+            getRepoCollaborators iAuth (repoInfo' ^. ghRepoOwner) (repo privateInput)
           thisInputCollaborators <- case thisInputCollaborators' of
-            RepoNotFound -> throw $ OtherError $ "checkAuthorization: repo " <> (getGhLogin . getGhRepoOwner $ repoInfo' ^. ghRepoOwner) <> "/" <> getGhRepoName (repoInfo' ^. ghRepoName) <> " not found"
-            GhCollaborators collaborators -> pure collaborators
+            RepoNotFound -> throw $ OtherError $ "checkAuthorization: repo " <> (getForgeLogin . getRepoOwner $ repoInfo' ^. ghRepoOwner) <> "/" <> getRepoName (repoInfo' ^. ghRepoName) <> " not found"
+            Collaborators collaborators -> pure collaborators
           let missingUsers = filter (`notElem` thisInputCollaborators) baseRepoCollaborators
           unless (null missingUsers)
             $ throw
@@ -109,7 +110,7 @@ checkAuthorization flakeDir repoConfig commitInfo = do
             <> showPretty privateInput
             <> "). The users missing permissions are: "
             <> showPretty missingUsers
-      pure $ githubAccessTokenNixConfig $ repoInfo' ^. ghToken
+      pure $ githubAccessTokenNixConfig $ repoInfoToken repoInfo'
 
 _extractPrivateReposFromErrors :: Text -> Maybe [Text]
 _extractPrivateReposFromErrors s =
@@ -119,8 +120,8 @@ _extractPrivateReposFromErrors s =
       [match] -> match
       _ -> error "impossible: regex only has one match group"
 
-githubAccessTokenNixConfig :: GhToken -> NixConfig
-githubAccessTokenNixConfig token = NixConfig $ Map.insert "access-tokens" ("github.com=" <> cs (getGhToken token)) mempty
+githubAccessTokenNixConfig :: ForgeToken -> NixConfig
+githubAccessTokenNixConfig token = NixConfig $ Map.insert "access-tokens" ("github.com=" <> cs (getForgeToken token)) mempty
 
 checkInputsAllowed :: FilePath -> [FlakeInput] -> M [GithubFlakeInput]
 checkInputsAllowed repoDir inputs = do
@@ -174,7 +175,7 @@ instance Pretty FlakeInput where
     FileInput url -> pretty url
     RawRepoUrlInput url -> pretty url
 
-data GithubFlakeInput = GithubFlakeInput {owner :: GhRepoOwner, repo :: GhRepoName}
+data GithubFlakeInput = GithubFlakeInput {owner :: RepoOwner, repo :: RepoName}
   deriving stock (Show, Eq, Ord)
 
 instance Pretty GithubFlakeInput where

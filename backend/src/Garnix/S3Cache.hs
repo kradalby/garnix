@@ -32,7 +32,7 @@ import System.IO (withBinaryFile)
 import System.IO qualified as IO
 import System.IO.Temp (withSystemTempDirectory)
 
-upload :: RunReporter -> GhRepoOwner -> GhRepoName -> EvaluationResult -> RepoPublicity -> M ()
+upload :: RunReporter -> RepoOwner -> RepoName -> EvaluationResult -> RepoPublicity -> M ()
 upload = curry5 $ mockable #s3CacheUploadMock $ \(runReporter, repoOwner, repoName, evalResult, repoPublicity) -> do
   withTextSpan ("phase", "s3-cache-upload") $ do
     withSpan (Garnix.S3Cache.getPackageName (evalResult ^. #derivation)) $ do
@@ -81,7 +81,7 @@ getDirSize path = do
           isFile <- doesFileExist path
           if isFile then getFileSize path else pure 0
 
-uploadStorePath :: GhRepoOwner -> GhRepoName -> StorePath -> RepoPublicity -> M ()
+uploadStorePath :: RepoOwner -> RepoName -> StorePath -> RepoPublicity -> M ()
 uploadStorePath repoOwner repoName storePath repoPublicity = do
   nixConfig <- view #userNixConfig
   withPoolM s3UploadPool repoOwner

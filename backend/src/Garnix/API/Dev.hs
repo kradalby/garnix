@@ -28,19 +28,19 @@ devAPI = do
   user <- getTestUser
   cookieSettings' <- view #cookieSettings
   jwtSettings' <- view #jwtSettings
-  mApplyCookies <- liftIO $ acceptLogin cookieSettings' jwtSettings' (WebSession user (GhToken "tok"))
+  mApplyCookies <- liftIO $ acceptLogin cookieSettings' jwtSettings' (WebSession user (ForgeToken "tok"))
   case mApplyCookies of
     Nothing -> throw Unauthorized
     Just applyCookies -> pure $ applyCookies (#success .== True)
 
 getTestUser :: M User
 getTestUser = do
-  existing <- try $ DB.getUser (GhLogin "dev-user")
+  existing <- try $ DB.getUser (ForgeLogin "dev-user")
   case existing of
     Right user -> return user
     Left (ErrorWithContext {err = NoSuchUser {}}) -> do
       DB.newUser
-        (GhLogin "dev-user")
+        (ForgeLogin "dev-user")
         (Email "dev-user@example.com")
         Admin
         True

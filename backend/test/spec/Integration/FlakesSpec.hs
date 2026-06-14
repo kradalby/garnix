@@ -13,12 +13,14 @@ import Database.PostgreSQL.Typed (pgSQL)
 import Garnix.API.GhWebhooks (ghWebhookPullRequest)
 import Garnix.BuildLogs (processLogsForGithub)
 import Garnix.DB qualified as DB
+import Garnix.Forge.Types
 import Garnix.GithubInterface
 import Garnix.Monad
 import Garnix.Monad.Async (resolve)
 import Garnix.Prelude
 import Garnix.TestHelpers
 import Garnix.TestHelpers.GithubInterface.Deprecated qualified as Deprecated
+import Garnix.TestHelpers.GithubInterface.Internal qualified as Internal
 import Garnix.TestHelpers.Monad (cleanDbConn, suppressLogsWhenPassing, withDevSecrets, withTestEnvironment)
 import Garnix.Types hiding (base, context, description, head, name, packageType, repo)
 import GitHub qualified as GH
@@ -190,26 +192,27 @@ testFlakeSpec dir fspec = do
   withSystemTempDirectory "garnix-test" $ \tmp -> do
     Turtle.cptree (base </> dir) tmp
     withTestEnvironment tmp $ \baseEnv -> do
-      ghInterface <-
+      ghForge <-
         Deprecated.testGithubInterface tmp buildRef <&> \ghi ->
           ghi
-            { _githubInterfaceGetAccessToken = \iAuth -> do
+            { _forgeGetAccessToken = \auth -> do
                 mgr <- view #manager
+                let GithubAuth iAuth _ = auth
                 liftIO
                   $ GHA.obtainAccessToken mgr iAuth
                   >>= \case
                     Left e -> error $ show e
-                    Right (GH.OAuth v) -> pure $ GhToken $ cs v
+                    Right (GH.OAuth v) -> pure $ ForgeToken $ cs v
                     Right _ -> error "Unexpected auth token type",
-              _githubInterfaceGetRepoCollaborators =
-                _githubInterfaceGetRepoCollaborators realGithubInterface,
-              _githubInterfaceGetRepoPublicity =
-                _githubInterfaceGetRepoPublicity realGithubInterface
+              _forgeGetRepoCollaborators =
+                _forgeGetRepoCollaborators githubForge,
+              _forgeGetRepoPublicity =
+                _forgeGetRepoPublicity githubForge
             }
       env <- do
         return
           $ baseEnv
-          & (#githubInterface .~ ghInterface)
+          & (#forges .~ Internal.githubForgeRegistry ghForge)
       run_ $ cmd "git" & silenceStdout & setWorkingDir tmp & addArgs ["init" :: String]
       run_ $ cmd "git" & silenceStdout & setWorkingDir tmp & addArgs ["add", "." :: String]
       run_ $ cmd "git" & silenceStdout & setWorkingDir tmp & addArgs ["commit", "-am", "Initial commit" :: String]

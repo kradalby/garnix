@@ -17,8 +17,7 @@ openSearchReporter =
           MetaCheck -> do
             RunReporter
               { reportLogs = \_ -> pure (),
-                reportComplete = \_ -> pure (),
-                ghRunId = Nothing
+                reportComplete = \_ -> pure ()
               }
           ReportRun run -> do
             RunReporter
@@ -31,15 +30,13 @@ openSearchReporter =
                         RunReportStatusFailure -> Just Failure
                         RunReportStatusTimeout -> Just Timeout
                         RunReportStatusCancelled -> Just Cancelled
-                  DB.setRunStatus (run ^. id) status,
-                ghRunId = Nothing
+                  DB.setRunStatus (run ^. id) status
               }
           ReportBuild _name build -> do
             RunReporter
               { reportLogs = \logLine -> do
                   storeBuildLogLine build logLine,
                 reportComplete = \_runReportStatus -> do
-                  pure (),
-                ghRunId = Nothing
+                  pure ()
               }
     }

@@ -14,6 +14,7 @@ import Garnix.Duration
 import Garnix.GithubInterface.Types
 import Garnix.Monad
 import Garnix.Prelude
+import Garnix.TestHelpers.GithubInterface.Internal (fakeRepoInfo)
 import Garnix.TestHelpers
 import Garnix.TestHelpers.GithubInterface qualified as GH
 import Garnix.TestHelpers.Monad
@@ -125,12 +126,12 @@ spec = do
       it "lists servers for organizations you aren't an admin in" $ GH.withFakeGithubInterface $ \st -> withServer $ \testServer -> do
         let someGhOrg = "user-isnt-admin-in-this-org"
         user <- testServer.login
-        GH.addOrgMembers st [GhUserOrgMembership someGhOrg (Other "user")]
+        GH.addOrgMembers st [UserOrgMembership someGhOrg (Other "user")]
         GH.mkRepo st someGhOrg "repo" identity
         serverInfo <-
           createServer
             someGhOrg
-            (GhRepoName "repo")
+            (RepoName "repo")
             (Branch "branch")
             Nothing
             (PackageName "package")
@@ -163,8 +164,8 @@ spec = do
         user <- testServer.login
         serverInfo <-
           createServer
-            (GhRepoOwner $ user ^. githubLogin)
-            (GhRepoName "repo")
+            (RepoOwner $ user ^. githubLogin)
+            (RepoName "repo")
             (Branch "branch")
             (Just 42)
             (PackageName "package")
@@ -296,9 +297,9 @@ spec = do
 
       it "supports exposing more than one configuration per repo" $ do
         user <- testUser
-        void $ createServer (GhRepoOwner $ GhLogin "owner") (GhRepoName "repo") (Branch "main") Nothing (PackageName "nginx") Nothing user ((ipv4Addr .~ "11.111.111.1") . (ipv6Addr .~ "::"))
-        void $ createServer (GhRepoOwner $ GhLogin "owner") (GhRepoName "repo") (Branch "main") Nothing (PackageName "psql") Nothing user ((ipv4Addr .~ "11.111.111.2") . (ipv6Addr .~ "::"))
-        void $ createServer (GhRepoOwner $ GhLogin "owner") (GhRepoName "repo") (Branch "feat") Nothing (PackageName "psql") Nothing user ((ipv4Addr .~ "11.111.111.3") . (ipv6Addr .~ "::"))
+        void $ createServer (RepoOwner $ ForgeLogin "owner") (RepoName "repo") (Branch "main") Nothing (PackageName "nginx") Nothing user ((ipv4Addr .~ "11.111.111.1") . (ipv6Addr .~ "::"))
+        void $ createServer (RepoOwner $ ForgeLogin "owner") (RepoName "repo") (Branch "main") Nothing (PackageName "psql") Nothing user ((ipv4Addr .~ "11.111.111.2") . (ipv6Addr .~ "::"))
+        void $ createServer (RepoOwner $ ForgeLogin "owner") (RepoName "repo") (Branch "feat") Nothing (PackageName "psql") Nothing user ((ipv4Addr .~ "11.111.111.3") . (ipv6Addr .~ "::"))
         hosts <- getHostsForTraefik
         case hosts of
           HostList [_, _, _] _ -> pure ()
@@ -307,7 +308,7 @@ spec = do
 
       it "serves configurations for pull request servers" $ do
         user <- testUser
-        void $ createServer (GhRepoOwner $ GhLogin "owner") (GhRepoName "repo") (Branch "main") (Just 42) (PackageName "nginx") Nothing user ((ipv4Addr .~ "11.111.111.1") . (ipv6Addr .~ "::"))
+        void $ createServer (RepoOwner $ ForgeLogin "owner") (RepoName "repo") (Branch "main") (Just 42) (PackageName "nginx") Nothing user ((ipv4Addr .~ "11.111.111.1") . (ipv6Addr .~ "::"))
         hosts <- getHostsForTraefik
         case hosts of
           HostList [_] _ -> pure ()
@@ -316,7 +317,7 @@ spec = do
 
       it "serves pull request configurations when the branch name is not a valid subdomain" $ do
         user <- testUser
-        void $ createServer (GhRepoOwner $ GhLogin "owner") (GhRepoName "repo") (Branch "sh/my-cool-feature") (Just 42) (PackageName "nginx") Nothing user ((ipv4Addr .~ "11.111.111.1") . (ipv6Addr .~ "::"))
+        void $ createServer (RepoOwner $ ForgeLogin "owner") (RepoName "repo") (Branch "sh/my-cool-feature") (Just 42) (PackageName "nginx") Nothing user ((ipv4Addr .~ "11.111.111.1") . (ipv6Addr .~ "::"))
         hosts <- getHostsForTraefik
         case hosts of
           HostList [_] _ -> pure ()
@@ -325,10 +326,10 @@ spec = do
 
       describe "invalid DNS" $ do
         forM_
-          [ (GhRepoOwner $ GhLogin "dots.are.invalid", GhRepoName "some-repo", Branch "some-branch", PackageName "some-host"),
-            (GhRepoOwner $ GhLogin "some-owner", GhRepoName "dots.are.invalid", Branch "some-branch", PackageName "some-host"),
-            (GhRepoOwner $ GhLogin "some-owner", GhRepoName "some-repo", Branch "dots.are.invalid", PackageName "some-host"),
-            (GhRepoOwner $ GhLogin "some-owner", GhRepoName "some-repo", Branch "some-branch", PackageName "dots.are.invalid")
+          [ (RepoOwner $ ForgeLogin "dots.are.invalid", RepoName "some-repo", Branch "some-branch", PackageName "some-host"),
+            (RepoOwner $ ForgeLogin "some-owner", RepoName "dots.are.invalid", Branch "some-branch", PackageName "some-host"),
+            (RepoOwner $ ForgeLogin "some-owner", RepoName "some-repo", Branch "dots.are.invalid", PackageName "some-host"),
+            (RepoOwner $ ForgeLogin "some-owner", RepoName "some-repo", Branch "some-branch", PackageName "dots.are.invalid")
           ]
           $ \(owner, repo, branch, packageName) -> do
             let invalidSubdomain = showPretty packageName <> "." <> showPretty branch <> "." <> showPretty repo <> "." <> showPretty owner
@@ -357,8 +358,8 @@ spec = do
             user <- testUser
             void
               $ createServer
-                (GhRepoOwner $ GhLogin "owner")
-                (GhRepoName "repo")
+                (RepoOwner $ ForgeLogin "owner")
+                (RepoName "repo")
                 (Branch "main")
                 Nothing
                 (PackageName "frontend")
@@ -367,8 +368,8 @@ spec = do
                 ((ipv4Addr .~ "1.2.3.4") . (ipv6Addr .~ "01:23:45:67:89:ab:cd:ef"))
             void
               $ createServer
-                (GhRepoOwner $ GhLogin "owner")
-                (GhRepoName "repo")
+                (RepoOwner $ ForgeLogin "owner")
+                (RepoName "repo")
                 (Branch "main")
                 Nothing
                 (PackageName "backend")
@@ -405,8 +406,8 @@ spec = do
         user <- testUser
         void
           $ createServer
-            (GhRepoOwner $ GhLogin "owner")
-            (GhRepoName "repo")
+            (RepoOwner $ ForgeLogin "owner")
+            (RepoName "repo")
             (Branch "branch")
             (Just 42)
             (PackageName "foo")
@@ -415,8 +416,8 @@ spec = do
             identity
         void
           $ createServer
-            (GhRepoOwner $ GhLogin "owner")
-            (GhRepoName "repo")
+            (RepoOwner $ ForgeLogin "owner")
+            (RepoName "repo")
             (Branch "branch")
             Nothing
             (PackageName "bar")
@@ -435,8 +436,8 @@ spec = do
         user <- testUser
         void
           $ createServer
-            (GhRepoOwner $ GhLogin "owner")
-            (GhRepoName "repo")
+            (RepoOwner $ ForgeLogin "owner")
+            (RepoName "repo")
             (Branch "branch")
             Nothing
             (PackageName "foo")
@@ -475,7 +476,7 @@ spec = do
         result `shouldHaveStatusCode` 200
         result <- testServer.delete (cs ("/api/hosts/" <> getHashId (getServerId (server ^. id))))
         result `shouldHaveStatusCode` 404
-        let owner = GhRepoOwner $ user ^. githubLogin
+        let owner = RepoOwner $ user ^. githubLogin
         server <- DB.getHetznerServerById [owner] (server ^. id)
         case server of
           Nothing -> pure ()
@@ -484,21 +485,21 @@ spec = do
 createSimpleServer :: User -> (ServerInfo -> ServerInfo) -> M ServerInfo
 createSimpleServer user =
   createServer
-    (GhRepoOwner $ user ^. githubLogin)
-    (GhRepoName "repo")
+    (RepoOwner $ user ^. githubLogin)
+    (RepoName "repo")
     (Branch "branch")
     Nothing
     (PackageName "package")
     Nothing
     user
 
-createServer :: GhRepoOwner -> GhRepoName -> Branch -> Maybe GhPullRequestId -> PackageName -> Maybe FilePath -> User -> (ServerInfo -> ServerInfo) -> M ServerInfo
+createServer :: RepoOwner -> RepoName -> Branch -> Maybe PullRequestId -> PackageName -> Maybe FilePath -> User -> (ServerInfo -> ServerInfo) -> M ServerInfo
 createServer repoOwner repoName branch pr packageName drvPath' user updateServerInfo = do
   let commitInfo =
         CommitInfo
           (user ^. githubLogin)
           (RepoIsPublic True)
-          (RepoInfo undefined undefined repoOwner repoName)
+          (fakeRepoInfo repoOwner repoName)
           (Just branch)
           Nothing
           (CommitHash "baz")

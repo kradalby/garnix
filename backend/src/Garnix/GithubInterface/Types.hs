@@ -1,4 +1,4 @@
-module Garnix.GithubInterface.Types (GhRole (..), GhUserOrgMembership (..)) where
+module Garnix.GithubInterface.Types (GhRole (..), UserOrgMembership (..)) where
 
 import Data.Aeson (withObject, withText, (.:))
 import Garnix.Prelude
@@ -12,15 +12,15 @@ instance FromJSON GhRole where
     "admin" -> Admin
     other -> Other other
 
-data GhUserOrgMembership = GhUserOrgMembership
-  { organizationName :: GhRepoOwner,
+data UserOrgMembership = UserOrgMembership
+  { organizationName :: RepoOwner,
     role :: GhRole
   }
   deriving stock (Show, Eq)
 
-instance FromJSON GhUserOrgMembership where
-  parseJSON = withObject "GhUserOrgMembership" $ \v -> do
+instance FromJSON UserOrgMembership where
+  parseJSON = withObject "UserOrgMembership" $ \v -> do
     org <- v .: "organization"
-    name <- withObject "GhUserOrgMembership.organization" (.: "login") org
+    name <- withObject "UserOrgMembership.organization" (.: "login") org
     role <- parseJSON =<< (v .: "role")
-    pure $ GhUserOrgMembership name role
+    pure $ UserOrgMembership name role

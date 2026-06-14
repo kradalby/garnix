@@ -1,5 +1,6 @@
 module Garnix.GithubInterface
-  ( realGithubInterface,
+  ( githubForge,
+    githubRepoInfo,
     fromRunReport,
     -- exported for testing
     _retryWhen,
@@ -16,6 +17,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as Vector
 import Garnix.BuildLogs
 import Garnix.Duration
+import Garnix.Forge.Types
 import Garnix.GithubInterface.Types
 import Garnix.Monad hiding
   ( getInstallations,
@@ -37,134 +39,8 @@ import Network.HTTP.Types (status500, statusCode)
 import Network.Wreq qualified as Wreq
 import Web.JWT qualified as JWT
 
-realGithubInterface :: (HasCallStack) => GithubInterface
-realGithubInterface =
-  GithubInterface
-    { _githubInterfaceGetInstallation = \id' -> do
-        appAuth <- view #githubAppAuth
-        liftIO $ GHA.mkInstallationAuth appAuth id',
-      _githubInterfaceGetInstallations = getInstallations,
-      _githubInterfaceGetGarnixInstallationId = \(GhRepoOwner (GhLogin owner)) (GhRepoName repoName) -> do
-        appAuth <- view #githubAppAuth
-        currentTime <- utcTimeToPOSIXSeconds <$> liftIO getCurrentTime
-        let expireTime = currentTime + (550 :: NominalDiffTime)
-        let claims =
-              JWT.JWTClaimsSet
-                { JWT.iat = JWT.numericDate currentTime,
-                  JWT.exp = JWT.numericDate expireTime,
-                  JWT.iss = JWT.stringOrURI . show . GH.untagId . GHA.aaAppId $ appAuth,
-                  JWT.sub = Nothing,
-                  JWT.nbf = Nothing,
-                  JWT.aud = Nothing,
-                  JWT.jti = Nothing,
-                  JWT.unregisteredClaims = mempty
-                }
-        let jwt = JWT.encodeSigned (JWT.EncodeRSAPrivateKey $ GHA.aaPrivateKey appAuth) mempty claims
-        let url =
-              "https://api.github.com/repos"
-                </> cs owner
-                </> cs repoName
-                </> "installation"
-        response <-
-          retryWreq $ withWreqOptions $ \options -> do
-            Wreq.getWith
-              ( options
-                  & Wreq.auth
-                  ?~ Wreq.oauth2Bearer (cs jwt)
-                  & Wreq.checkResponse
-                  ?~ \_ _ -> pure ()
-              )
-              url
-        handleGithubWreqErrors "_githubInterfaceGetGarnixInstallationId" response >>= \mResponse ->
-          pure $ mResponse >>= (^? key "id" . _Integer),
-      _githubInterfaceGetAccessToken = \iAuth -> do
-        mgr <- view #manager
-        _retryGithubRequest (liftIO (GHA.obtainAccessToken mgr iAuth))
-          >>= handleGithubRequestErrors "getAccessToken" "garnix" "garnix-github-app"
-          >>= \case
-            (GH.OAuth v) -> pure $ GhToken $ cs v
-            _ -> throw $ OtherError "getAccessToken: unexpected auth token type",
-      _githubInterfaceGetDefaultBranch = \miAuth owner repo ->
-        case miAuth of
-          Nothing -> do
-            mgr <- view #manager
-            _retryGithubRequest (liftIO (GH.executeRequestWithMgr' mgr (GH.repositoryR (coerce owner) (coerce repo))))
-              >>= handleGithubRequestErrors "getDefaultBranch" owner repo
-              >>= \branch -> pure $ Branch <$> GH.repoDefaultBranch branch
-          Just iAuth ->
-            executeAppRequest iAuth (GH.repositoryR (coerce owner) (coerce repo))
-              >>= handleGithubRequestErrors "getDefaultBranch" owner repo
-              >>= \branch -> pure $ Branch <$> GH.repoDefaultBranch branch,
-      _githubInterfaceGetHeadCommit = getHeadCommitForBranch,
-      _githubInterfaceNewBuildReport = createBuildReportGH,
-      _githubInterfaceUpdateBuildReport = updateBuildReportGH,
-      _githubInterfaceDoesRepoFileExist = \commitInfo path -> do
-        let GhRepoOwner (GhLogin owner') = commitInfo ^. repoInfo . ghRepoOwner
-            GhRepoName repoName' = commitInfo ^. repoInfo . ghRepoName
-            CommitHash commit' = commitInfo ^. commit
-            url =
-              "https://api.github.com/repos"
-                </> cs owner'
-                </> cs repoName'
-                </> "contents"
-                </> path
-                <> "?ref="
-                <> cs commit'
-
-        response <-
-          retryWreq $ withWreqOptions $ \options ->
-            Wreq.headWith
-              ( options
-                  & Wreq.auth
-                  ?~ Wreq.oauth2Token (cs $ getGhToken (commitInfo ^. repoInfo . ghToken))
-                  & Wreq.checkResponse
-                  ?~ \_ _ -> pure ()
-              )
-              url
-        maybe FileDoesntExist (const FileExists)
-          <$> handleGithubWreqErrors "_githubInterfaceDoesRepoFileExist" response,
-      _githubInterfaceGetRemote = \commitInfo -> do
-        pure $ case commitInfo ^. prFromFork of
-          Just (PrFromFork fromFork) ->
-            RemoteUrl
-              $ "https://github.com/"
-              <> fromFork
-              <> ".git"
-          Nothing ->
-            let GhRepoOwner (GhLogin owner') = commitInfo ^. repoInfo . ghRepoOwner
-                GhRepoName repo' = commitInfo ^. repoInfo . ghRepoName
-             in RemoteUrl
-                  $ "https://x-access-token:"
-                  <> getGhToken (commitInfo ^. repoInfo . ghToken)
-                  <> "@github.com/"
-                  <> owner'
-                  <> "/"
-                  <> repo'
-                  <> ".git",
-      _githubInterfaceGetRepoCollaborators = \iAuth owner@(GhRepoOwner (GhLogin repoOwner)) repo@(GhRepoName repoName) -> do
-        let req = GH.collaboratorsOnR (GH.mkName Proxy repoOwner) (GH.mkName Proxy repoName) GH.FetchAll
-        executeAppRequest iAuth req
-          >>= handleGithubRequestErrors "getRepoCollaborators" owner repo
-          >>= \case
-            collaborators ->
-              pure
-                $ GhCollaborators
-                $ GhLogin
-                . GH.untagName
-                . GH.simpleUserLogin
-                <$> Vector.toList collaborators,
-      _githubInterfaceGetRepoPublicity = \iAuth owner@(GhRepoOwner (GhLogin repoOwner)) repo@(GhRepoName repoName) -> do
-        let req = GH.repositoryR (GH.mkName Proxy repoOwner) (GH.mkName Proxy repoName)
-        executeAppRequest iAuth req
-          >>= handleGithubRequestErrors "getRepoPublicity" owner repo
-          >>= \r -> pure $ RepoIsPublic $ not $ GH.repoPrivate r,
-      _githubInterfaceGetInstalledOrgs = getInstalledOrgs,
-      _githubInterfaceGetReposInInstallationAccessibleTo = getReposInInstallationAccessibleTo,
-      _githubInterfaceOpenGithubPullRequest = openGithubPullRequestInternal
-    }
-
-getInstallations :: GhToken -> M [GH.Id GHA.Installation]
-getInstallations (GhToken userToken) = do
+getInstallations :: ForgeToken -> M [GH.Id GHA.Installation]
+getInstallations (ForgeToken userToken) = do
   let auth = GH.OAuth (cs userToken)
       request =
         GH.query
@@ -191,14 +67,14 @@ getInstallations (GhToken userToken) = do
         . _Integral
         . to (GH.mkId Proxy)
 
-getHeadCommitForBranch :: GhToken -> GhRepoOwner -> GhRepoName -> Branch -> M CommitHash
-getHeadCommitForBranch (GhToken token) owner repo branch = do
+getHeadCommitForBranch :: ForgeToken -> RepoOwner -> RepoName -> Branch -> M CommitHash
+getHeadCommitForBranch (ForgeToken token) owner repo branch = do
   let auth = GH.OAuth (cs token)
       request =
         GH.query
           [ "repos",
-            cs . getGhLogin . getGhRepoOwner $ owner,
-            cs . getGhRepoName $ repo,
+            cs . getForgeLogin . getRepoOwner $ owner,
+            cs . getRepoName $ repo,
             "branches",
             cs branch
           ]
@@ -214,8 +90,8 @@ getHeadCommitForBranch (GhToken token) owner repo branch = do
       log Error $ "_githubInterfaceGetHeadCommit failed for '" <> context <> "': Could not find 'commit.sha'."
       throw . OtherError $ "Could not get the HEAD commit for " <> context
 
-openGithubPullRequestInternal :: GhRepoOwner -> GhRepoName -> PullRequest -> M PullRequestResult
-openGithubPullRequestInternal ghOwner@(GhRepoOwner (GhLogin owner)) ghRepo@(GhRepoName repo) pr = do
+openGithubPullRequestInternal :: RepoOwner -> RepoName -> PullRequest -> M PullRequestResult
+openGithubPullRequestInternal ghOwner@(RepoOwner (ForgeLogin owner)) ghRepo@(RepoName repo) pr = do
   installationId <- getGarnixInstallationId ghOwner ghRepo
   iAuth <- case installationId of
     Nothing -> throw $ GarnixAppUnauthorized ghOwner ghRepo
@@ -244,8 +120,8 @@ openGithubPullRequestInternal ghOwner@(GhRepoOwner (GhLogin owner)) ghRepo@(GhRe
     Right (GH.PullRequest {GH.pullRequestHtmlUrl = GH.URL url}) ->
       pure $ PullRequestResult {_pullRequestResultUrl = url}
 
-getReposInInstallationAccessibleTo :: GH.Id GHA.Installation -> GhToken -> M [Text]
-getReposInInstallationAccessibleTo installationId (GhToken userToken) = do
+getReposInInstallationAccessibleTo :: GH.Id GHA.Installation -> ForgeToken -> M [Text]
+getReposInInstallationAccessibleTo installationId (ForgeToken userToken) = do
   let auth = GH.OAuth (cs userToken)
       request =
         GH.query
@@ -280,8 +156,8 @@ getReposInInstallationAccessibleTo installationId (GhToken userToken) = do
               pure $ map (^. #full_name) $ v ^. #repositories
       pure $ concat repositories
 
-getInstalledOrgs :: GhToken -> M [GhUserOrgMembership]
-getInstalledOrgs (GhToken tok) = do
+getInstalledOrgs :: ForgeToken -> M [UserOrgMembership]
+getInstalledOrgs (ForgeToken tok) = do
   -- This endpoint lists org memberships for which these conditions are met:
   --
   -- 1. The user is a member of the org,
@@ -320,7 +196,7 @@ getInstalledOrgs (GhToken tok) = do
     $ "getInstalledOrgs unexpected status code from github: "
     <> show (response ^. Wreq.responseStatus . Wreq.statusCode)
 
-  memberships :: [GhUserOrgMembership] <-
+  memberships :: [UserOrgMembership] <-
     aesonDecode
       ("response from " <> cs endpoint)
       parseJSON
@@ -332,8 +208,8 @@ getInstalledOrgs (GhToken tok) = do
 
 -- * Making Github requests
 
-createBuildReportGH :: (HasCallStack) => RepoInfo -> GhRunReport -> M GhRunId
-createBuildReportGH (RepoInfo iAuth _ owner@(GhRepoOwner (GhLogin repoUser)) repo@(GhRepoName repoName)) report = do
+createBuildReportGH :: (HasCallStack) => GHA.InstallationAuth -> RepoOwner -> RepoName -> GhRunReport -> M ForgeRunId
+createBuildReportGH iAuth owner@(RepoOwner (ForgeLogin repoUser)) repo@(RepoName repoName) report = do
   run <- fromRunReport report
   res <-
     executeAppRequest @Aeson.Value iAuth
@@ -344,8 +220,8 @@ createBuildReportGH (RepoInfo iAuth _ owner@(GhRepoOwner (GhLogin repoUser)) rep
         Nothing -> throw $ FailedToParseCreateReportResult v
         Just v -> pure $ fromInteger v
 
-updateBuildReportGH :: (HasCallStack) => GhRunId -> GhRunReport -> RepoInfo -> M ()
-updateBuildReportGH runId report (RepoInfo iAuth _ owner@(GhRepoOwner (GhLogin repoUser)) repo@(GhRepoName repoName)) = do
+updateBuildReportGH :: (HasCallStack) => ForgeRunId -> GhRunReport -> GHA.InstallationAuth -> RepoOwner -> RepoName -> M ()
+updateBuildReportGH runId report iAuth owner@(RepoOwner (ForgeLogin repoUser)) repo@(RepoName repoName) = do
   run <- fromRunReport report
   res <-
     executeAppRequest @Aeson.Value iAuth
@@ -353,12 +229,13 @@ updateBuildReportGH runId report (RepoInfo iAuth _ owner@(GhRepoOwner (GhLogin r
   handleGithubRequestErrors "updateBuildReportGH" owner repo res $> ()
 
 fromRunReport :: GhRunReport -> M GhRun
-fromRunReport (GhRunReport name commit url status' title summary logs') = do
+fromRunReport (GhRunReport name commit url status' title summary logs' externalId) = do
   fromRelativeUrl <- relativeUrlConverter
   pure
     $ GhRun
       { _ghRunName = name,
         _ghRunHeadSha = commit,
+        _ghRunExternalId = externalId,
         _ghRunDetailsUrl = fromRelativeUrl <$> url,
         _ghRunStatus = case status' of
           RunReportStatusInProgress -> "in_progress"
@@ -378,7 +255,7 @@ fromRunReport (GhRunReport name commit url status' title summary logs') = do
           RunReportStatusCancelled -> Just "cancelled"
       }
 
-handleGithubRequestErrors :: (HasCallStack) => Text -> GhRepoOwner -> GhRepoName -> Either GH.Error a -> M a
+handleGithubRequestErrors :: (HasCallStack) => Text -> RepoOwner -> RepoName -> Either GH.Error a -> M a
 handleGithubRequestErrors method owner name = \case
   Left githubError | hasStatus (== 404) githubError -> do
     log Informational $ "Request " <> method <> " failed with 404. Error: " <> show githubError
@@ -500,3 +377,138 @@ hasStatus :: (Int -> Bool) -> GH.Error -> Bool
 hasStatus check (GH.HTTPError (HttpExceptionRequest _ (StatusCodeException r _))) =
   check (statusCode (responseStatus r))
 hasStatus _ _ = False
+
+-- * GitHub 'Forge' implementation
+--
+-- 'githubForge' is the kind-indexed 'Forge' for GitHub. It reuses the helpers
+-- above; the only adaptation versus 'realGithubInterface' is that credentials are
+-- passed as @'ForgeAuth' 'GitHub'@ (which bundles the installation auth and a
+-- token) rather than as a bare @GHA.InstallationAuth@.
+
+obtainGhToken :: (HasCallStack) => GHA.InstallationAuth -> M ForgeToken
+obtainGhToken iAuth = do
+  mgr <- view #manager
+  _retryGithubRequest (liftIO (GHA.obtainAccessToken mgr iAuth))
+    >>= handleGithubRequestErrors "getAccessToken" "garnix" "garnix-github-app"
+    >>= \case
+      (GH.OAuth v) -> pure $ ForgeToken $ cs v
+      _ -> throw $ OtherError "getAccessToken: unexpected auth token type"
+
+garnixInstallationIdGH :: (HasCallStack) => RepoOwner -> RepoName -> M (Maybe Integer)
+garnixInstallationIdGH (RepoOwner (ForgeLogin owner)) (RepoName repoName) = do
+  appAuth <- githubAppConfigAuth <$> githubAppConfig
+  currentTime <- utcTimeToPOSIXSeconds <$> liftIO getCurrentTime
+  let expireTime = currentTime + (550 :: NominalDiffTime)
+  let claims =
+        JWT.JWTClaimsSet
+          { JWT.iat = JWT.numericDate currentTime,
+            JWT.exp = JWT.numericDate expireTime,
+            JWT.iss = JWT.stringOrURI . show . GH.untagId . GHA.aaAppId $ appAuth,
+            JWT.sub = Nothing,
+            JWT.nbf = Nothing,
+            JWT.aud = Nothing,
+            JWT.jti = Nothing,
+            JWT.unregisteredClaims = mempty
+          }
+  let jwt = JWT.encodeSigned (JWT.EncodeRSAPrivateKey $ GHA.aaPrivateKey appAuth) mempty claims
+  let url = "https://api.github.com/repos" </> cs owner </> cs repoName </> "installation"
+  response <-
+    retryWreq $ withWreqOptions $ \options ->
+      Wreq.getWith
+        (options & Wreq.auth ?~ Wreq.oauth2Bearer (cs jwt) & Wreq.checkResponse ?~ \_ _ -> pure ())
+        url
+  handleGithubWreqErrors "garnixInstallationIdGH" response >>= \mResponse ->
+    pure $ mResponse >>= (^? key "id" . _Integer)
+
+getDefaultBranchGH :: (HasCallStack) => Maybe GHA.InstallationAuth -> RepoOwner -> RepoName -> M (Maybe Branch)
+getDefaultBranchGH miAuth owner repo = case miAuth of
+  Nothing -> do
+    mgr <- view #manager
+    _retryGithubRequest (liftIO (GH.executeRequestWithMgr' mgr (GH.repositoryR (coerce owner) (coerce repo))))
+      >>= handleGithubRequestErrors "getDefaultBranch" owner repo
+      >>= \branch -> pure $ Branch <$> GH.repoDefaultBranch branch
+  Just iAuth ->
+    executeAppRequest iAuth (GH.repositoryR (coerce owner) (coerce repo))
+      >>= handleGithubRequestErrors "getDefaultBranch" owner repo
+      >>= \branch -> pure $ Branch <$> GH.repoDefaultBranch branch
+
+doesGhFileExist :: (HasCallStack) => RepoOwner -> RepoName -> ForgeToken -> CommitHash -> FilePath -> M DoesFileExist
+doesGhFileExist (RepoOwner (ForgeLogin owner')) (RepoName repoName') token (CommitHash commit') path = do
+  let url =
+        "https://api.github.com/repos"
+          </> cs owner'
+          </> cs repoName'
+          </> "contents"
+          </> path
+          <> "?ref="
+          <> cs commit'
+  response <-
+    retryWreq $ withWreqOptions $ \options ->
+      Wreq.headWith
+        (options & Wreq.auth ?~ Wreq.oauth2Token (cs $ getForgeToken token) & Wreq.checkResponse ?~ \_ _ -> pure ())
+        url
+  maybe FileDoesntExist (const FileExists) <$> handleGithubWreqErrors "doesGhFileExist" response
+
+ghRemoteUrl :: RepoOwner -> RepoName -> ForgeToken -> Maybe PrFromFork -> RemoteUrl
+ghRemoteUrl (RepoOwner (ForgeLogin owner')) (RepoName repo') token = \case
+  Just (PrFromFork fromFork) ->
+    RemoteUrl $ "https://github.com/" <> fromFork <> ".git"
+  Nothing ->
+    RemoteUrl $ "https://x-access-token:" <> getForgeToken token <> "@github.com/" <> owner' <> "/" <> repo' <> ".git"
+
+getRepoCollaboratorsGH :: (HasCallStack) => GHA.InstallationAuth -> RepoOwner -> RepoName -> M Collaborators
+getRepoCollaboratorsGH iAuth owner@(RepoOwner (ForgeLogin repoOwner)) repo@(RepoName repoName) = do
+  let req = GH.collaboratorsOnR (GH.mkName Proxy repoOwner) (GH.mkName Proxy repoName) GH.FetchAll
+  executeAppRequest iAuth req
+    >>= handleGithubRequestErrors "getRepoCollaborators" owner repo
+    >>= \collaborators ->
+      pure $ Collaborators $ ForgeLogin . GH.untagName . GH.simpleUserLogin <$> Vector.toList collaborators
+
+getRepoPublicityGH :: (HasCallStack) => GHA.InstallationAuth -> RepoOwner -> RepoName -> M RepoPublicity
+getRepoPublicityGH iAuth owner@(RepoOwner (ForgeLogin repoOwner)) repo@(RepoName repoName) = do
+  let req = GH.repositoryR (GH.mkName Proxy repoOwner) (GH.mkName Proxy repoName)
+  executeAppRequest iAuth req
+    >>= handleGithubRequestErrors "getRepoPublicity" owner repo
+    >>= \r -> pure $ RepoIsPublic $ not $ GH.repoPrivate r
+
+-- | Build a 'RepoInfo' for a GitHub repository from its installation auth and
+-- token. The single place that pairs the GitHub forge with GitHub credentials when
+-- constructing repo context (webhooks, orchestrator, etc.).
+githubRepoInfo :: GHA.InstallationAuth -> ForgeToken -> RepoOwner -> RepoName -> RepoInfo
+githubRepoInfo iAuth token owner name =
+  RepoInfo (SomeForgeRepo (ForgeRepo delegatingGithubForge (GithubAuth iAuth token) owner name)) owner name
+
+githubForge :: (HasCallStack) => Forge 'GitHub
+githubForge =
+  Forge
+    { _forgeForgeKind = SGitHub,
+      _forgeGetInstallation = \fid -> do
+        appAuth <- githubAppConfigAuth <$> githubAppConfig
+        iAuth <- liftIO $ GHA.mkInstallationAuth appAuth (ghInstallationId fid)
+        token <- obtainGhToken iAuth
+        pure $ GithubAuth iAuth token,
+      _forgeGetAppInstallationId = \owner name ->
+        fmap ForgeInstallationId <$> garnixInstallationIdGH owner name,
+      _forgeGetAccessToken = \(GithubAuth iAuth _) -> obtainGhToken iAuth,
+      _forgeGetDefaultBranch = \mAuth owner repo ->
+        getDefaultBranchGH ((\(GithubAuth iAuth _) -> iAuth) <$> mAuth) owner repo,
+      _forgeGetHeadCommit = getHeadCommitForBranch,
+      _forgeNewBuildReport = \(ForgeRepo _ (GithubAuth iAuth _) owner name) report ->
+        createBuildReportGH iAuth owner name report,
+      _forgeUpdateBuildReport = \runId report (ForgeRepo _ (GithubAuth iAuth _) owner name) ->
+        updateBuildReportGH runId report iAuth owner name,
+      _forgeDoesRepoFileExist = \frepo commit _mFork path ->
+        doesGhFileExist (_forgeRepoOwner frepo) (_forgeRepoName frepo) (forgeAuthToken (_forgeRepoAuth frepo)) commit path,
+      _forgeGetRemote = \frepo _commit mFork ->
+        pure $ ghRemoteUrl (_forgeRepoOwner frepo) (_forgeRepoName frepo) (forgeAuthToken (_forgeRepoAuth frepo)) mFork,
+      _forgeGetRepoCollaborators = \(GithubAuth iAuth _) owner repo -> getRepoCollaboratorsGH iAuth owner repo,
+      _forgeGetRepoPublicity = \(GithubAuth iAuth _) owner repo -> getRepoPublicityGH iAuth owner repo,
+      _forgeGetInstallations = \token ->
+        map (ForgeInstallationId . toInteger . GH.untagId) <$> getInstallations token,
+      _forgeGetInstalledOrgs = getInstalledOrgs,
+      _forgeGetReposAccessibleTo = \fid token -> getReposInInstallationAccessibleTo (ghInstallationId fid) token,
+      _forgeOpenPullRequest = openGithubPullRequestInternal
+    }
+  where
+    ghInstallationId :: ForgeInstallationId -> Id GHA.Installation
+    ghInstallationId = Id . fromInteger . getForgeInstallationId

@@ -10,7 +10,7 @@ import GitHub.Data.Id (Id (..))
 import Servant.Auth.Server
 
 data CommitAPI route = CommitAPI
-  { _commitAPIgetCommitsForRepo :: route :- "repo" :> Capture "owner" GhRepoOwner :> Capture "repo" GhRepoName :> Get '[JSON] ListCommits,
+  { _commitAPIgetCommitsForRepo :: route :- "repo" :> Capture "owner" RepoOwner :> Capture "repo" RepoName :> Get '[JSON] ListCommits,
     _commitAPIgetCommitsForUser :: route :- Get '[JSON] ListCommits,
     _commitAPIgetSingleCommit :: route :- Capture "commit" CommitHash :> Get '[JSON] GetCommit
   }
@@ -50,7 +50,7 @@ instance ToJSON GetCommit where
   toEncoding = ourToEncoding
   toJSON = ourToJSON
 
-getCommitsForRepo :: (HasCallStack) => Maybe User -> GhRepoOwner -> GhRepoName -> M ListCommits
+getCommitsForRepo :: (HasCallStack) => Maybe User -> RepoOwner -> RepoName -> M ListCommits
 getCommitsForRepo user repoOwner repoName = do
   installationId <- getGarnixInstallationId repoOwner repoName
   iAuth <- case installationId of

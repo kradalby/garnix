@@ -37,6 +37,7 @@ import Garnix.Log
 import Garnix.Monad.ForkT
 import Garnix.Monad.Memoization (MemoTable)
 import Garnix.Monad.Metrics (Metrics, incrementEvent)
+import Garnix.Forge.Types
 import Garnix.Monad.Pool (Pool)
 import Garnix.Nix.Types (StoreHash)
 import Garnix.Nix.Types qualified as Nix
@@ -44,10 +45,7 @@ import Garnix.Prelude
 import Garnix.StripeLib.Types qualified as StripeLib
 import Garnix.Types hiding (ghRunId, statusCode)
 import GitHub qualified as GH
-import GitHub.App.Auth (InstallationAuth)
 import GitHub.App.Auth qualified as GHA
-import GitHub.Data (Id)
-import GitHub.Data.Apps (App)
 import GitHub.Data.Installations qualified as GHA
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Types (statusCode)
@@ -61,15 +59,11 @@ import Text.Read (readMaybe)
 
 data Env = Env
   { testFeatures :: Set TestFeature,
-    githubAppAuth :: GHA.AppAuth,
-    githubAppName :: Text,
-    githubAppId :: Id App,
-    githubWebhookSecret :: ByteString,
+    -- | Per-forge configuration\/secrets; absent for unconfigured forges.
+    forgeConfigs :: ForgeKind -> Maybe ForgeConfig,
     manager :: Manager,
-    githubClientSecret :: Text,
-    githubClientId :: Text,
     buildLogsReportingPort :: Maybe Int,
-    githubInterface :: GithubInterface,
+    forges :: ForgeKind -> SomeForge,
     hetznerInterface :: HetznerInterface,
     serverPoolConfig :: [(ServerTier, Int)],
     -- | A thread-safe version of `CWD`
@@ -90,8 +84,8 @@ data Env = Env
     hetznerToken :: StrictByteString,
     opensearchQueryUrl :: String,
     opensearchPassword :: ByteString,
-    nixEvalPool :: Garnix.Monad.Pool.Pool GhRepoOwner,
-    s3UploadPool :: Garnix.Monad.Pool.Pool GhRepoOwner,
+    nixEvalPool :: Garnix.Monad.Pool.Pool RepoOwner,
+    s3UploadPool :: Garnix.Monad.Pool.Pool RepoOwner,
     stripe :: StripeEnv,
     mocks :: Maybe EnvMocks,
     emptyDir :: FilePath,
@@ -173,7 +167,7 @@ data EnvMocks = EnvMocks
     makeOpenSearchMsearchRequestMock ::
       Maybe
         (Mock (Value, Value) BSL.ByteString),
-    createCustomerMock :: Maybe (Mock (GhRepoOwner, StripeLib.Name, Email) StripeLib.CustomerDto),
+    createCustomerMock :: Maybe (Mock (RepoOwner, StripeLib.Name, Email) StripeLib.CustomerDto),
     createSubscriptionMock :: Maybe (Mock (CustomerId, StripeLib.PriceId, Text, Text) StripeLib.SubscriptionDto),
     createInvoiceItemMock :: Maybe (Mock (CustomerId, InvoiceId, Text, StripeLib.UnitAmount, Int64) ()),
     listSubscriptionsMock :: Maybe (Mock CustomerId StripeLib.SubscriptionListDto),
@@ -181,7 +175,7 @@ data EnvMocks = EnvMocks
     getPriceMock :: Maybe (Mock StripeLib.PriceId StripeLib.PriceDto),
     getBuildPlanMock :: Maybe (Mock ByteString Nix.Plan),
     buildPkgMock :: Maybe (Mock (Maybe FodChecker, RunReporter, BuildKind, FlakeDir, RepoConfig, ProductPlan, Build) Build),
-    s3CacheUploadMock :: Maybe (Mock (RunReporter, GhRepoOwner, GhRepoName, EvaluationResult, RepoPublicity) ()),
+    s3CacheUploadMock :: Maybe (Mock (RunReporter, RepoOwner, RepoName, EvaluationResult, RepoPublicity) ()),
     fodCheckMock :: Maybe (Mock (Maybe FodChecker, Nix.DrvPath) ()),
     rebuildFodMock :: Maybe (Mock (System, Nix.DrvPath) (Either Text Text))
   }
@@ -252,24 +246,21 @@ newtype ReportSummary = ReportSummary {getReportSummary :: Text}
 
 data RunReporter = RunReporter
   { reportLogs :: LogLine -> M (),
-    reportComplete :: RunReportStatus -> M (),
-    ghRunId :: Maybe GhRunId
+    reportComplete :: RunReportStatus -> M ()
   }
 
 instance Semigroup RunReporter where
   a <> b =
     RunReporter
       { reportLogs = \logs -> reportLogs a logs >> reportLogs b logs,
-        reportComplete = \status -> reportComplete a status >> reportComplete b status,
-        ghRunId = ghRunId a <|> ghRunId b
+        reportComplete = \status -> reportComplete a status >> reportComplete b status
       }
 
 instance Monoid RunReporter where
   mempty =
     RunReporter
       { reportLogs = \_ -> pure (),
-        reportComplete = \_ -> pure (),
-        ghRunId = Nothing
+        reportComplete = \_ -> pure ()
       }
 
 data ReportType
@@ -308,8 +299,8 @@ data FodChecker = FodChecker
 
 -- * Github interface
 
-data GhCollaborators
-  = GhCollaborators [GhLogin]
+data Collaborators
+  = Collaborators [ForgeLogin]
   | RepoNotFound
   deriving (Show)
 
@@ -318,23 +309,85 @@ newtype RemoteUrl = RemoteUrl Text
 realRemoteUrl :: RemoteUrl -> Text
 realRemoteUrl (RemoteUrl url) = url
 
-data GithubInterface = GithubInterface
-  { _githubInterfaceGetInstallation :: (HasCallStack) => GH.Id GHA.Installation -> M GHA.InstallationAuth,
-    _githubInterfaceGetInstallations :: (HasCallStack) => GhToken -> M [GH.Id GHA.Installation],
-    _githubInterfaceGetGarnixInstallationId :: (HasCallStack) => GhRepoOwner -> GhRepoName -> M (Maybe Integer),
-    _githubInterfaceGetAccessToken :: (HasCallStack) => GHA.InstallationAuth -> M GhToken,
-    _githubInterfaceGetDefaultBranch :: (HasCallStack) => Maybe GHA.InstallationAuth -> GhRepoOwner -> GhRepoName -> M (Maybe Branch),
-    _githubInterfaceGetHeadCommit :: (HasCallStack) => GhToken -> GhRepoOwner -> GhRepoName -> Branch -> M CommitHash,
-    _githubInterfaceNewBuildReport :: (HasCallStack) => RepoInfo -> GhRunReport -> M GhRunId,
-    _githubInterfaceUpdateBuildReport :: (HasCallStack) => GhRunId -> GhRunReport -> RepoInfo -> M (),
-    _githubInterfaceDoesRepoFileExist :: (HasCallStack) => CommitInfo -> FilePath -> M DoesFileExist,
-    _githubInterfaceGetRemote :: (HasCallStack) => CommitInfo -> M RemoteUrl,
-    _githubInterfaceGetRepoCollaborators :: (HasCallStack) => InstallationAuth -> GhRepoOwner -> GhRepoName -> M GhCollaborators,
-    _githubInterfaceGetRepoPublicity :: (HasCallStack) => InstallationAuth -> GhRepoOwner -> GhRepoName -> M RepoPublicity,
-    _githubInterfaceGetInstalledOrgs :: (HasCallStack) => GhToken -> M [GhUserOrgMembership],
-    _githubInterfaceGetReposInInstallationAccessibleTo :: (HasCallStack) => GH.Id GHA.Installation -> GhToken -> M [Text],
-    _githubInterfaceOpenGithubPullRequest :: (HasCallStack) => GhRepoOwner -> GhRepoName -> PullRequest -> M PullRequestResult
+-- * Forge interface (generalizes the old @GithubInterface@ over 'ForgeKind')
+
+-- | The generalized, kind-indexed forge interface. It mirrors 'GithubInterface'
+-- but is parameterized by the forge kind @k@: every method touching credentials
+-- uses @'ForgeAuth' k@, so an implementation can only ever be fed its own
+-- credentials. A concrete forge ('githubForge', 'giteaForge', …) fixes @k@.
+--
+-- Repo context is passed as a 'ForgeRepo' @k@, which bundles the forge, its
+-- matching credentials, and the owner\/name — all sharing the index @k@ — so the
+-- credentials can never be paired with the wrong forge.
+data Forge (k :: ForgeKind) = Forge
+  { _forgeForgeKind :: SForgeKind k,
+    _forgeGetInstallation :: (HasCallStack) => ForgeInstallationId -> M (ForgeAuth k),
+    _forgeGetAppInstallationId :: (HasCallStack) => RepoOwner -> RepoName -> M (Maybe ForgeInstallationId),
+    _forgeGetAccessToken :: (HasCallStack) => ForgeAuth k -> M ForgeToken,
+    _forgeGetDefaultBranch :: (HasCallStack) => Maybe (ForgeAuth k) -> RepoOwner -> RepoName -> M (Maybe Branch),
+    _forgeGetHeadCommit :: (HasCallStack) => ForgeToken -> RepoOwner -> RepoName -> Branch -> M CommitHash,
+    _forgeNewBuildReport :: (HasCallStack) => ForgeRepo k -> GhRunReport -> M ForgeRunId,
+    _forgeUpdateBuildReport :: (HasCallStack) => ForgeRunId -> GhRunReport -> ForgeRepo k -> M (),
+    _forgeDoesRepoFileExist :: (HasCallStack) => ForgeRepo k -> CommitHash -> Maybe PrFromFork -> FilePath -> M DoesFileExist,
+    _forgeGetRemote :: (HasCallStack) => ForgeRepo k -> CommitHash -> Maybe PrFromFork -> M RemoteUrl,
+    _forgeGetRepoCollaborators :: (HasCallStack) => ForgeAuth k -> RepoOwner -> RepoName -> M Collaborators,
+    _forgeGetRepoPublicity :: (HasCallStack) => ForgeAuth k -> RepoOwner -> RepoName -> M RepoPublicity,
+    _forgeGetInstallations :: (HasCallStack) => ForgeToken -> M [ForgeInstallationId],
+    _forgeGetInstalledOrgs :: (HasCallStack) => ForgeToken -> M [UserOrgMembership],
+    _forgeGetReposAccessibleTo :: (HasCallStack) => ForgeInstallationId -> ForgeToken -> M [Text],
+    _forgeOpenPullRequest :: (HasCallStack) => RepoOwner -> RepoName -> PullRequest -> M PullRequestResult
   }
+
+-- | A repository together with the forge it lives on and a /matching/ credential.
+-- All three share the index @k@, so 'forgeRepoAuth' can only be used with
+-- 'forgeRepoForge'. This is the value that flows through the build pipeline
+-- (eventually replacing 'RepoInfo').
+data ForgeRepo (k :: ForgeKind) = ForgeRepo
+  { _forgeRepoForge :: Forge k,
+    _forgeRepoAuth :: ForgeAuth k,
+    _forgeRepoOwner :: RepoOwner,
+    _forgeRepoName :: RepoName
+  }
+
+-- | A forge with its kind index hidden — used for the registry and for
+-- reconstructing a forge from a runtime 'ForgeKind' at the one existential
+-- boundary (webhook ingress \/ DB load).
+data SomeForge where
+  SomeForge :: Forge k -> SomeForge
+
+-- | A 'ForgeRepo' with its kind index hidden, for code paths that handle a repo of
+-- statically-unknown forge (e.g. a generic DB listing). Unpack once at the top.
+data SomeForgeRepo where
+  SomeForgeRepo :: ForgeRepo k -> SomeForgeRepo
+
+-- | A repository plus the forge it lives on and matching credentials, bundled
+-- type-safely in 'SomeForgeRepo'. (Moved here from "Garnix.Types" so it can carry
+-- the M-valued forge.) The owner\/name are duplicated at the top level for the many
+-- existing @^. ghRepoOwner@ \/ @^. ghRepoName@ call sites; they always match the
+-- bundle.
+data RepoInfo = RepoInfo
+  { _repoInfoForgeRepo :: SomeForgeRepo,
+    _repoInfoGhRepoOwner :: RepoOwner,
+    _repoInfoGhRepoName :: RepoName
+  }
+
+instance Show RepoInfo where
+  showsPrec _ (RepoInfo _ owner name) =
+    showString $ "RepoInfo <forge> " <> cs (show owner) <> " " <> cs (show name)
+
+-- | The access token carried by a repo's forge credentials.
+repoInfoToken :: RepoInfo -> ForgeToken
+repoInfoToken (RepoInfo (SomeForgeRepo (ForgeRepo _ auth _ _)) _ _) = forgeAuthToken auth
+
+data CommitInfo = CommitInfo
+  { _commitInfoReqUser :: ForgeLogin,
+    _commitInfoRepoPublicity :: RepoPublicity,
+    _commitInfoRepoInfo :: RepoInfo,
+    _commitInfoBranch :: Maybe Branch,
+    _commitInfoPrFromFork :: Maybe PrFromFork,
+    _commitInfoCommit :: CommitHash
+  }
+  deriving stock (Show)
 
 data RunReportStatus
   = RunReportStatusInProgress
@@ -351,7 +404,11 @@ data GhRunReport = GhRunReport
     _ghRunReportStatus :: RunReportStatus,
     _ghRunReportTitle :: Text,
     _ghRunReportSummary :: Text,
-    _ghRunReportLogs :: RawLogs
+    _ghRunReportLogs :: RawLogs,
+    -- | Our own correlation key (the build id), set as the check run's
+    -- @external_id@ so a provider-native rerun can be mapped back to a build
+    -- without us storing the forge's run id.
+    _ghRunReportExternalId :: Maybe Text
   }
   deriving stock (Eq, Show)
 
@@ -376,83 +433,140 @@ data HetznerInterface = HetznerInterface
 makeFields ''PullRequest
 makeFields ''EnvMocks
 makeFields ''GhRunReport
+makeFields ''RepoInfo
+makeFields ''CommitInfo
+makePrisms ''CommitInfo
+
+-- 'Loggable' instances for the moved types (the class lives in "Garnix.Log", which
+-- this module imports; the instances are non-orphan because the types are here).
+instance Loggable CommitInfo where
+  asLog info = asLog (info ^. _CommitInfo)
+
+instance Loggable RepoInfo where
+  asLog (RepoInfo _ owner name) = asLog owner <> asLog name
 
 -- Accessors
 
+-- | Resolve the GitHub forge from the registry, for the GitHub-app-specific
+-- operations (installations, app auth, the logged-in user's orgs\/repos) that have
+-- no cross-forge meaning. The 'SGitHub' match recovers @k ~ 'GitHub@.
+withGithubForge :: (HasCallStack) => (Forge 'GitHub -> M a) -> M a
+withGithubForge g = do
+  forges' <- view #forges
+  case forges' GitHub of
+    SomeForge f -> case _forgeForgeKind f of
+      SGitHub -> g f
+      _ -> throw $ OtherError "withGithubForge: registry returned a non-GitHub forge for GitHub"
+
+-- | Run an action with the forge and matching credentials bundled in a 'RepoInfo'.
+withRepoForge :: RepoInfo -> (forall k. Forge k -> ForgeRepo k -> M a) -> M a
+withRepoForge repoInfo g =
+  case _repoInfoForgeRepo repoInfo of
+    SomeForgeRepo fr -> g (_forgeRepoForge fr) fr
+
+-- | A GitHub 'Forge' whose every method delegates to whatever GitHub forge is
+-- currently in 'Env.forges'. This is what 'RepoInfo' bundles carry, so that the
+-- single source of truth for the GitHub implementation is the registry (the real
+-- forge in production, an injected fake in tests) — while the bundle still pairs a
+-- @Forge 'GitHub@ with @ForgeAuth 'GitHub@ for type safety.
+delegatingGithubForge :: Forge 'GitHub
+delegatingGithubForge =
+  Forge
+    { _forgeForgeKind = SGitHub,
+      _forgeGetInstallation = \a -> withGithubForge $ \f -> _forgeGetInstallation f a,
+      _forgeGetAppInstallationId = \a b -> withGithubForge $ \f -> _forgeGetAppInstallationId f a b,
+      _forgeGetAccessToken = \a -> withGithubForge $ \f -> _forgeGetAccessToken f a,
+      _forgeGetDefaultBranch = \a b c -> withGithubForge $ \f -> _forgeGetDefaultBranch f a b c,
+      _forgeGetHeadCommit = \a b c d -> withGithubForge $ \f -> _forgeGetHeadCommit f a b c d,
+      _forgeNewBuildReport = \a b -> withGithubForge $ \f -> _forgeNewBuildReport f a b,
+      _forgeUpdateBuildReport = \a b c -> withGithubForge $ \f -> _forgeUpdateBuildReport f a b c,
+      _forgeDoesRepoFileExist = \a b c d -> withGithubForge $ \f -> _forgeDoesRepoFileExist f a b c d,
+      _forgeGetRemote = \a b c -> withGithubForge $ \f -> _forgeGetRemote f a b c,
+      _forgeGetRepoCollaborators = \a b c -> withGithubForge $ \f -> _forgeGetRepoCollaborators f a b c,
+      _forgeGetRepoPublicity = \a b c -> withGithubForge $ \f -> _forgeGetRepoPublicity f a b c,
+      _forgeGetInstalledOrgs = \a -> withGithubForge $ \f -> _forgeGetInstalledOrgs f a,
+      _forgeGetInstallations = \a -> withGithubForge $ \f -> _forgeGetInstallations f a,
+      _forgeGetReposAccessibleTo = \a b -> withGithubForge $ \f -> _forgeGetReposAccessibleTo f a b,
+      _forgeOpenPullRequest = \a b c -> withGithubForge $ \f -> _forgeOpenPullRequest f a b c
+    }
+
+-- | The configuration for a forge, or an error if it isn't configured.
+forgeConfig :: (HasCallStack) => ForgeKind -> M ForgeConfig
+forgeConfig kind = do
+  configs <- view #forgeConfigs
+  case configs kind of
+    Just c -> pure c
+    Nothing -> throw $ OtherError $ "No configuration for forge " <> show kind
+
+-- | The GitHub App configuration (GitHub must be configured with an app).
+githubAppConfig :: (HasCallStack) => M GithubAppConfig
+githubAppConfig = do
+  c <- forgeConfig GitHub
+  case forgeConfigApp c of
+    Just app -> pure app
+    Nothing -> throw $ OtherError "GitHub forge is configured without a GitHub App"
+
 getInstallation :: GH.Id GHA.Installation -> M GHA.InstallationAuth
-getInstallation inst = do
-  gh <- view #githubInterface
-  _githubInterfaceGetInstallation gh inst
+getInstallation inst = withGithubForge $ \f -> do
+  auth <- _forgeGetInstallation f (ForgeInstallationId (toInteger (GH.untagId inst)))
+  case auth of GithubAuth iAuth _ -> pure iAuth
 
-getInstallations :: GhToken -> M [GH.Id GHA.Installation]
-getInstallations token = do
-  gh <- view #githubInterface
-  _githubInterfaceGetInstallations gh token
+getInstallations :: ForgeToken -> M [GH.Id GHA.Installation]
+getInstallations token = withGithubForge $ \f ->
+  map (GH.mkId Proxy . fromInteger . getForgeInstallationId) <$> _forgeGetInstallations f token
 
-getGarnixInstallationId :: GhRepoOwner -> GhRepoName -> M (Maybe Integer)
-getGarnixInstallationId owner name = do
-  gh <- view #githubInterface
-  _githubInterfaceGetGarnixInstallationId gh owner name
+getGarnixInstallationId :: RepoOwner -> RepoName -> M (Maybe Integer)
+getGarnixInstallationId owner name = withGithubForge $ \f ->
+  fmap (toInteger . getForgeInstallationId) <$> _forgeGetAppInstallationId f owner name
 
-getAccessToken :: GHA.InstallationAuth -> M GhToken
-getAccessToken iAuth = do
-  gh <- view #githubInterface
-  _githubInterfaceGetAccessToken gh iAuth
+getAccessToken :: GHA.InstallationAuth -> M ForgeToken
+getAccessToken iAuth = withGithubForge $ \f -> _forgeGetAccessToken f (GithubAuth iAuth (ForgeToken ""))
 
-getDefaultBranch :: Maybe GHA.InstallationAuth -> GhRepoOwner -> GhRepoName -> M (Maybe Branch)
-getDefaultBranch miAuth owner repo = do
-  gh <- view #githubInterface
-  _githubInterfaceGetDefaultBranch gh miAuth owner repo
+getDefaultBranch :: Maybe GHA.InstallationAuth -> RepoOwner -> RepoName -> M (Maybe Branch)
+getDefaultBranch miAuth owner repo = withGithubForge $ \f ->
+  _forgeGetDefaultBranch f ((\ia -> GithubAuth ia (ForgeToken "")) <$> miAuth) owner repo
 
-getHeadCommit :: GhToken -> GhRepoOwner -> GhRepoName -> Branch -> M CommitHash
-getHeadCommit token owner repo branch = do
-  gh <- view #githubInterface
-  _githubInterfaceGetHeadCommit gh token owner repo branch
+getHeadCommit :: ForgeToken -> RepoOwner -> RepoName -> Branch -> M CommitHash
+getHeadCommit token owner repo branch = withGithubForge $ \f -> _forgeGetHeadCommit f token owner repo branch
 
-newBuildReport :: RepoInfo -> GhRunReport -> M GhRunId
-newBuildReport repoInfo build' = do
-  gh <- view #githubInterface
-  _githubInterfaceNewBuildReport gh repoInfo build'
+newBuildReport :: RepoInfo -> GhRunReport -> M ForgeRunId
+newBuildReport repoInfo build' = withRepoForge repoInfo $ \f fr -> _forgeNewBuildReport f fr build'
 
-updateBuildReport :: GhRunId -> GhRunReport -> RepoInfo -> M ()
-updateBuildReport runId' runReport repoInfo = do
-  gh <- view #githubInterface
-  _githubInterfaceUpdateBuildReport gh runId' runReport repoInfo
+updateBuildReport :: ForgeRunId -> GhRunReport -> RepoInfo -> M ()
+updateBuildReport runId' runReport repoInfo = withRepoForge repoInfo $ \f fr -> _forgeUpdateBuildReport f runId' runReport fr
 
 getRemote :: (HasCallStack) => CommitInfo -> M RemoteUrl
-getRemote commitInfo = do
-  gh <- view #githubInterface
-  _githubInterfaceGetRemote gh commitInfo
+getRemote commitInfo = withRepoForge (commitInfo ^. repoInfo) $ \f fr ->
+  _forgeGetRemote f fr (commitInfo ^. commit) (commitInfo ^. prFromFork)
 
-getRepoCollaborators :: (HasCallStack) => InstallationAuth -> GhRepoOwner -> GhRepoName -> M GhCollaborators
-getRepoCollaborators iAuth owner repo = do
-  gh <- view #githubInterface
-  _githubInterfaceGetRepoCollaborators gh iAuth owner repo
+-- | The GitHub installation auth embedded in a repo's forge bundle (GitHub only).
+repoInfoGithubAuth :: (HasCallStack) => RepoInfo -> M GHA.InstallationAuth
+repoInfoGithubAuth (RepoInfo (SomeForgeRepo (ForgeRepo _ auth _ _)) _ _) =
+  case auth of
+    GithubAuth iAuth _ -> pure iAuth
+    _ -> throw $ OtherError "repoInfoGithubAuth: repo is not on GitHub"
+
+getRepoCollaborators :: (HasCallStack) => GHA.InstallationAuth -> RepoOwner -> RepoName -> M Collaborators
+getRepoCollaborators iAuth owner repo = withGithubForge $ \f ->
+  _forgeGetRepoCollaborators f (GithubAuth iAuth (ForgeToken "")) owner repo
 
 doesRepoFileExist :: (HasCallStack) => CommitInfo -> FilePath -> M DoesFileExist
-doesRepoFileExist commitInfo path = do
-  gh <- view #githubInterface
-  _githubInterfaceDoesRepoFileExist gh commitInfo path
+doesRepoFileExist commitInfo path = withRepoForge (commitInfo ^. repoInfo) $ \f fr ->
+  _forgeDoesRepoFileExist f fr (commitInfo ^. commit) (commitInfo ^. prFromFork) path
 
-getRepoPublicity :: (HasCallStack) => InstallationAuth -> GhRepoOwner -> GhRepoName -> M RepoPublicity
-getRepoPublicity iAuth owner name = do
-  gh <- view #githubInterface
-  _githubInterfaceGetRepoPublicity gh iAuth owner name
+getRepoPublicity :: (HasCallStack) => GHA.InstallationAuth -> RepoOwner -> RepoName -> M RepoPublicity
+getRepoPublicity iAuth owner name = withGithubForge $ \f ->
+  _forgeGetRepoPublicity f (GithubAuth iAuth (ForgeToken "")) owner name
 
-getInstalledOrgs :: (HasCallStack) => GhToken -> M [GhUserOrgMembership]
-getInstalledOrgs tok = do
-  gh <- view #githubInterface
-  _githubInterfaceGetInstalledOrgs gh tok
+getInstalledOrgs :: (HasCallStack) => ForgeToken -> M [UserOrgMembership]
+getInstalledOrgs tok = withGithubForge $ \f -> _forgeGetInstalledOrgs f tok
 
-getReposInInstallationAccessibleTo :: (HasCallStack) => GH.Id GHA.Installation -> GhToken -> M [Text]
-getReposInInstallationAccessibleTo installation token = do
-  gh <- view #githubInterface
-  _githubInterfaceGetReposInInstallationAccessibleTo gh installation token
+getReposInInstallationAccessibleTo :: (HasCallStack) => GH.Id GHA.Installation -> ForgeToken -> M [Text]
+getReposInInstallationAccessibleTo installation token = withGithubForge $ \f ->
+  _forgeGetReposAccessibleTo f (ForgeInstallationId (toInteger (GH.untagId installation))) token
 
-openGithubPullRequest :: (HasCallStack) => GhRepoOwner -> GhRepoName -> PullRequest -> M PullRequestResult
-openGithubPullRequest owner name pr = do
-  gh <- view #githubInterface
-  _githubInterfaceOpenGithubPullRequest gh owner name pr
+openGithubPullRequest :: (HasCallStack) => RepoOwner -> RepoName -> PullRequest -> M PullRequestResult
+openGithubPullRequest owner name pr = withGithubForge $ \f -> _forgeOpenPullRequest f owner name pr
 
 withWreqOptions :: (Wreq.Options -> IO a) -> M a
 withWreqOptions action = do

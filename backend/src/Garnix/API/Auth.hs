@@ -4,6 +4,8 @@ import Control.Lens
 import Garnix.AccessToken
 import Garnix.AccessToken.Types
 import Garnix.DB qualified as DB
+import Garnix.Forge.Gitea qualified as Gitea
+import Garnix.Forge.Types
 import Garnix.Monad
 import Garnix.ParseHttpBasicAuth
 import Garnix.Prelude
@@ -22,7 +24,7 @@ import Servant.Auth.Server.Internal.JWT (makeJWT)
 import Web.Cookie
 
 data UserDto = UserDto
-  { _userDtoUsername :: GhLogin,
+  { _userDtoUsername :: ForgeLogin,
     _userDtoEmail :: Email,
     _userDtoIsAdmin :: Bool
   }
@@ -76,7 +78,7 @@ getJwt mAuthHeader authResult = do
           err -> err
       )
       $ DB.getUser
-      $ GhLogin username
+      $ ForgeLogin username
   isValid <- isAccessTokenValid (user ^. id) (AccessToken password) (^. #api)
   when (not isValid) $ do
     throw Unauthorized
@@ -114,7 +116,7 @@ data LoginAPI route = LoginAPI
                  '[ Header "Set-Cookie" SetCookie,
                     Header "Set-Cookie" SetCookie
                   ]
-                 GhLogin
+                 ForgeLogin
              )
   }
   deriving (Generic)
@@ -135,7 +137,7 @@ data SignupAPI route = SignupAPI
              ),
     _signupAPIFinishSignup ::
       route
-        :- Auth '[Cookie] (CreatingUser GhToken)
+        :- Auth '[Cookie] (CreatingUser ForgeToken)
         :> ReqBody '[JSON] CreateUser
         :> Post
              '[JSON]
@@ -143,7 +145,7 @@ data SignupAPI route = SignupAPI
                  '[ Header "Set-Cookie" SetCookie,
                     Header "Set-Cookie" SetCookie
                   ]
-                 GhLogin
+                 ForgeLogin
              )
   }
   deriving (Generic)
@@ -167,7 +169,7 @@ signupAPI =
 login :: M LoginLinks
 login = do
   oaState <- OA.newOAuthState
-  ghOauth <- githubOauthLogin
+  ghOauth <- forgeOAuthConfig GitHub OAuthLogin
   githubLink <- OA.getAuthorize oaState ghOauth "foo"
   return $ LoginLinks {_loginLinksGithub = githubLink}
 
@@ -184,7 +186,7 @@ logout = do
 signup :: M SignupLinks
 signup = do
   oaState <- OA.newOAuthState
-  ghOauth <- githubOauthSignup
+  ghOauth <- forgeOAuthConfig GitHub OAuthSignup
   githubLink <- OA.getAuthorize oaState ghOauth "foo"
   return
     $ SignupLinks
@@ -196,10 +198,10 @@ loginCallback ::
   M
     ( Headers
         '[Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie]
-        GhLogin
+        ForgeLogin
     )
 loginCallback code = do
-  (login', _, token) <- callbackHelper githubOauthLogin code
+  (login', _, token) <- callbackHelper GitHub OAuthLogin code
   cookieSettings' <- view #cookieSettings
   jwtSettings' <- view #jwtSettings
   user <- DB.getUser login' <?> "calling getUser"
@@ -222,7 +224,7 @@ signupCallback ::
         (CreatingUser ())
     )
 signupCallback code = do
-  (login', email', token) <- callbackHelper githubOauthSignup code
+  (login', email', token) <- callbackHelper GitHub OAuthSignup code
   eUser <- try $ DB.getUser login' <?> "calling getUser"
   creatingUser <- case eUser of
     Right _ ->
@@ -251,28 +253,32 @@ signupCallback code = do
     Nothing -> throw Unauthorized
     Just applyCookies -> return $ applyCookies (void creatingUser)
 
-callbackHelper :: M OA.OAuth2 -> Maybe OAuthCode -> M (GhLogin, Email, GhToken)
-callbackHelper _ Nothing = throw $ OtherError "'code' param missing"
-callbackHelper githubOauth (Just (OAuthCode code)) = do
+callbackHelper :: ForgeKind -> OAuthFlow -> Maybe OAuthCode -> M (ForgeLogin, Email, ForgeToken)
+callbackHelper _ _ Nothing = throw $ OtherError "'code' param missing"
+callbackHelper kind flow (Just (OAuthCode code)) = do
   oaState <- OA.newOAuthState <?> "Creating new oauth state"
-  ghOauth <- githubOauth
+  oauth <- forgeOAuthConfig kind flow
   mToken <-
-    liftIO (OA.getAuthorized ghOauth oaState (Just code) Nothing)
+    liftIO (OA.getAuthorized oauth oaState (Just code) Nothing)
       <?> "calling OA.getAuthorized"
   case mToken of
     Nothing -> throw GithubDidntGiveUsAToken
     Just (token, _) -> do
-      let auth = GH.OAuth $ cs token
-      eGhUser <- liftIO (GH.github auth GH.userInfoCurrentR) <?> "calling userInfoCurrentR"
-      case eGhUser of
-        Left e -> throw $ OtherError $ show e
-        Right ghUser -> do
-          e <- getEmail auth ghUser <?> "calling getEmail"
-          pure
-            ( GhLogin . GH.untagName $ GH.userLogin ghUser,
-              e,
-              GhToken $ cs token
-            )
+      let forgeToken = ForgeToken $ cs token
+      (login', email') <- forgeUserInfo kind forgeToken <?> "fetching forge user info"
+      pure (login', email', forgeToken)
+
+-- | Fetch the authenticated user's login and primary email from a forge, given an
+-- OAuth user token. Forge-specific; GitHub implemented, others pending (#10).
+forgeUserInfo :: ForgeKind -> ForgeToken -> M (ForgeLogin, Email)
+forgeUserInfo GitHub (ForgeToken token) = do
+  let auth = GH.OAuth $ cs token
+  eGhUser <- liftIO (GH.github auth GH.userInfoCurrentR) <?> "calling userInfoCurrentR"
+  case eGhUser of
+    Left e -> throw $ OtherError $ show e
+    Right ghUser -> do
+      e <- getEmail auth ghUser <?> "calling getEmail"
+      pure (ForgeLogin . GH.untagName $ GH.userLogin ghUser, e)
   where
     getEmail auth ghUser = case GH.userEmail ghUser of
       Just e -> pure $ Email e
@@ -283,11 +289,13 @@ callbackHelper githubOauth (Just (OAuthCode code)) = do
         case find GH.emailPrimary <$> emails of
           Right (Just e') -> pure $ Email $ GH.emailAddress e'
           _ -> throw $ OtherError "No email address"
+forgeUserInfo Gitea tok = Gitea.giteaUserInfo tok
+forgeUserInfo GitLab _ = throw $ OtherError "GitLab user info not implemented yet"
 
 finishSignup ::
-  AuthResult (CreatingUser GhToken) ->
+  AuthResult (CreatingUser ForgeToken) ->
   CreateUser ->
-  M (Headers '[Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] GhLogin)
+  M (Headers '[Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] ForgeLogin)
 finishSignup (Authenticated cUser) addenda = do
   -- The things in AuthResult we can trust, because we put them there
   user <-
@@ -304,32 +312,41 @@ finishSignup (Authenticated cUser) addenda = do
     Just applyCookies -> return $ applyCookies $ user ^. githubLogin
 finishSignup _ _ = throw $ OtherError "Did not receive expected user info"
 
-githubOauthLogin :: M OA.OAuth2
-githubOauthLogin = do
-  clientId <- view #githubClientId
-  ghClientSecret <- view #githubClientSecret
-  fromRelativeUrl <- relativeUrlConverter
-  pure
-    $ OA.OAuth2
-      { oauthClientId = clientId,
-        oauthClientSecret = ghClientSecret,
-        oauthOAuthorizeEndpoint = "https://github.com/login/oauth/authorize",
-        oauthAccessTokenEndpoint = "https://github.com/login/oauth/access_token",
-        oauthCallback = fromRelativeUrl "login/cb",
-        oauthScopes = []
-      }
+-- | Which OAuth flow we're in; determines the callback URL.
+data OAuthFlow = OAuthLogin | OAuthSignup
 
-githubOauthSignup :: M OA.OAuth2
-githubOauthSignup = do
-  clientId <- view #githubClientId
-  ghClientSecret <- view #githubClientSecret
+oauthCallbackPath :: OAuthFlow -> Text
+oauthCallbackPath = \case
+  OAuthLogin -> "login/cb"
+  OAuthSignup -> "signup/fill"
+
+-- | The OAuth2 client config for a given forge and flow. Forge-specific endpoints;
+-- GitHub implemented, others pending per-forge config (#7) and impls (#10).
+forgeOAuthConfig :: ForgeKind -> OAuthFlow -> M OA.OAuth2
+forgeOAuthConfig kind flow = do
   fromRelativeUrl <- relativeUrlConverter
-  pure
-    $ OA.OAuth2
-      { oauthClientId = clientId,
-        oauthClientSecret = ghClientSecret,
-        oauthOAuthorizeEndpoint = "https://github.com/login/oauth/authorize",
-        oauthAccessTokenEndpoint = "https://github.com/login/oauth/access_token",
-        oauthCallback = fromRelativeUrl "signup/fill",
-        oauthScopes = []
-      }
+  config <- forgeConfig kind
+  let clientId = forgeConfigOAuthClientId config
+      clientSecret = forgeConfigOAuthClientSecret config
+  case kind of
+    GitHub ->
+      pure
+        $ OA.OAuth2
+          { oauthClientId = clientId,
+            oauthClientSecret = clientSecret,
+            oauthOAuthorizeEndpoint = "https://github.com/login/oauth/authorize",
+            oauthAccessTokenEndpoint = "https://github.com/login/oauth/access_token",
+            oauthCallback = fromRelativeUrl (oauthCallbackPath flow),
+            oauthScopes = []
+          }
+    Gitea ->
+      pure
+        $ OA.OAuth2
+          { oauthClientId = clientId,
+            oauthClientSecret = clientSecret,
+            oauthOAuthorizeEndpoint = forgeConfigBaseUrl config <> "/login/oauth/authorize",
+            oauthAccessTokenEndpoint = forgeConfigBaseUrl config <> "/login/oauth/access_token",
+            oauthCallback = fromRelativeUrl (oauthCallbackPath flow),
+            oauthScopes = []
+          }
+    GitLab -> throw $ OtherError "GitLab OAuth not implemented yet"

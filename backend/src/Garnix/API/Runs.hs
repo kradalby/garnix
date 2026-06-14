@@ -42,8 +42,8 @@ getRunLogs mUser runId mAfter = do
 data RunSummary = RunSummary
   { _runSummaryId :: Text,
     _runSummaryName :: Text,
-    _runSummaryRepoUser :: GhRepoOwner,
-    _runSummaryRepoName :: GhRepoName,
+    _runSummaryRepoUser :: RepoOwner,
+    _runSummaryRepoName :: RepoName,
     _runSummaryGitCommit :: CommitHash,
     _runSummaryBranch :: Maybe Branch,
     _runSummaryStatus :: Maybe Status,

@@ -17,15 +17,16 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as Text
 import Garnix.Build.Checkout qualified as Checkout
 import Garnix.DB.ModuleValues qualified as ModuleValues
+import Garnix.GithubInterface (githubRepoInfo)
 import Garnix.Monad
 import Garnix.Monad.SubProcess qualified as SubProcess
 import Garnix.NixConfig qualified as NixConfig
 import Garnix.Prelude
 import Garnix.Sandbox
-import Garnix.Types (Branch (..), CommitInfo (..), Error (..), GhLogin, RepoInfo (..), getCommitHash, getGhLogin, getGhRepoName, getGhRepoOwner)
+import Garnix.Types (Branch (..), Error (..), ForgeLogin, getCommitHash, getForgeLogin, getRepoName, getRepoOwner)
 import GitHub.Data.Id (Id (Id))
 
-getCommitInfo :: GhLogin -> ModuleValues.GetRepoAndModuleValues -> M CommitInfo
+getCommitInfo :: ForgeLogin -> ModuleValues.GetRepoAndModuleValues -> M CommitInfo
 getCommitInfo reqUser modules = do
   case (modules ^. #repo_user, modules ^. #repo_name) of
     (Just user, Just repo) -> do
@@ -43,7 +44,7 @@ getCommitInfo reqUser modules = do
             $ CommitInfo
               { _commitInfoReqUser = reqUser,
                 _commitInfoRepoPublicity = repoPublicity,
-                _commitInfoRepoInfo = RepoInfo iAuth token user repo,
+                _commitInfoRepoInfo = githubRepoInfo iAuth token user repo,
                 _commitInfoBranch = Just branch,
                 _commitInfoPrFromFork = Nothing,
                 _commitInfoCommit = commit
@@ -68,9 +69,9 @@ remoteWithFlake branch values = Checkout.withBeforeAction $ do
               : ( ( \m ->
                       ( m ^. #name,
                         "github:"
-                          <> getGhLogin (getGhRepoOwner $ m ^. #repo_user)
+                          <> getForgeLogin (getRepoOwner $ m ^. #repo_user)
                           <> "/"
-                          <> getGhRepoName (m ^. #repo_name)
+                          <> getRepoName (m ^. #repo_name)
                           <> "?ref="
                           <> getCommitHash (m ^. #git_commit)
                       )
@@ -149,8 +150,8 @@ toFlakeFile branch modulesAndValues = do
     extraInputs :: ModuleValues.Module -> Text
     extraInputs m =
       let moduleName = m ^. #name
-          repoUser = getGhLogin . getGhRepoOwner $ m ^. #repo_user
-          repoName = getGhRepoName $ m ^. #repo_name
+          repoUser = getForgeLogin . getRepoOwner $ m ^. #repo_user
+          repoName = getRepoName $ m ^. #repo_name
        in cs
             [i|
     #{moduleName}.url = "github:#{repoUser}/#{repoName}";|]

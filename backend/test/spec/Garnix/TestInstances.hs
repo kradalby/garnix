@@ -52,14 +52,14 @@ instance Arbitrary Branch where
 instance Arbitrary RepoPublicity where
   arbitrary = RepoIsPublic <$> arbitrary
 
-instance Arbitrary GhRepoOwner where
-  arbitrary = GhRepoOwner <$> arbitrary
+instance Arbitrary RepoOwner where
+  arbitrary = RepoOwner <$> arbitrary
 
-instance Arbitrary GhRepoName where
-  arbitrary = GhRepoName <$> arbitrary
+instance Arbitrary RepoName where
+  arbitrary = RepoName <$> arbitrary
 
-instance Arbitrary GhLogin where
-  arbitrary = GhLogin <$> arbitrary
+instance Arbitrary ForgeLogin where
+  arbitrary = ForgeLogin <$> arbitrary
 
 instance Arbitrary CommitHash where
   arbitrary = CommitHash <$> arbitrary
@@ -85,8 +85,8 @@ instance Arbitrary BuildId where
 instance Arbitrary Status where
   arbitrary = genericArbitrary uniform
 
-instance Arbitrary GhRunId where
-  arbitrary = GhRunId <$> arbitrary
+instance Arbitrary ForgeRunId where
+  arbitrary = ForgeRunId <$> arbitrary
 
 instance Arbitrary CheckSuiteEvent where
   arbitrary = genericArbitrary uniform

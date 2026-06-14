@@ -25,7 +25,8 @@ import Garnix.DB qualified as DB
 import Garnix.DB.FeatureFlags (withRecachedFeatureFlags)
 import Garnix.DB.FeatureFlags.Types (getFeatureFlagConfig)
 import Garnix.Duration
-import Garnix.GithubInterface
+import Garnix.Forge (forgeForKind)
+import Garnix.Forge.Types (ForgeConfig (..), ForgeKind (..), GithubAppConfig (..))
 import Garnix.HetznerInterface
 import Garnix.Hosting.Deploy (stopUnusedServers)
 import Garnix.Hosting.ServerPool qualified as ServerPool
@@ -265,21 +266,51 @@ withEnv testFeatures buildLogsDir buildLogsReportingPort action = do
   mocks <- envMocks testFeatures
   featureFlagConfig <- getFeatureFlagConfig
   fodCheckPool <- Garnix.Monad.Pool.newPool 20 metrics #fodCheckQueueWaitTime #fodCheckQueueLen
+  -- Gitea is configured only when GITEA_BASE_URL is set in the environment.
+  mGiteaConfig <- do
+    mBase <- lookupEnv "GITEA_BASE_URL"
+    forM mBase $ \base -> do
+      whSecret <- maybe "" cs <$> lookupEnv "GITEA_WEBHOOK_SECRET"
+      clientId <- maybe "" cs <$> lookupEnv "GITEA_CLIENT_ID"
+      clientSecret <- maybe "" cs <$> lookupEnv "GITEA_CLIENT_SECRET"
+      apiToken <- fmap (ForgeToken . cs) <$> lookupEnv "GITEA_API_TOKEN"
+      pure
+        ForgeConfig
+          { forgeConfigBaseUrl = cs base,
+            forgeConfigWebhookSecret = whSecret,
+            forgeConfigOAuthClientId = clientId,
+            forgeConfigOAuthClientSecret = clientSecret,
+            forgeConfigApiToken = apiToken,
+            forgeConfigApp = Nothing
+          }
   withDefaultLogger $ \defaultLogger -> do
-    let env =
+    let githubConfig =
+          ForgeConfig
+            { forgeConfigBaseUrl = "https://github.com",
+              forgeConfigWebhookSecret = ghK,
+              forgeConfigOAuthClientId = ghClientId,
+              forgeConfigOAuthClientSecret = ghClientSecret,
+              forgeConfigApiToken = Nothing,
+              forgeConfigApp =
+                Just
+                  GithubAppConfig
+                    { githubAppConfigAuth = AppAuth appId appPkPem,
+                      githubAppConfigName = ghAppName,
+                      githubAppConfigId = appId
+                    }
+            }
+        env =
           Env
             { testFeatures = testFeatures,
-              githubAppAuth = AppAuth appId appPkPem,
-              githubAppId = appId,
-              githubAppName = ghAppName,
-              githubClientSecret = ghClientSecret,
-              githubClientId = ghClientId,
+              forgeConfigs = \case
+                GitHub -> Just githubConfig
+                Gitea -> mGiteaConfig
+                GitLab -> Nothing,
               buildLogsReportingPort = buildLogsReportingPort,
               workingDir = curDir,
               nixXdgCacheDir = Nothing,
               userNixConfig = defaultNixConfig,
-              githubWebhookSecret = ghK,
-              githubInterface = realGithubInterface,
+              forges = forgeForKind,
               hetznerInterface = realHetznerInterface,
               serverPoolConfig =
                 [ (I2x4, 10),
@@ -374,7 +405,12 @@ type ContextList =
 toApplication :: Env -> Application
 toApplication env =
   let ghKey :: GitHubKey a
-      ghKey = gitHubKey . pure $ env ^. #githubWebhookSecret
+      ghKey =
+        gitHubKey . pure $
+          maybe
+            (error "toApplication: GitHub forge is not configured")
+            forgeConfigWebhookSecret
+            ((env ^. #forgeConfigs) GitHub)
       context :: Context ContextList
       context =
         (env ^. #jwtSettings)

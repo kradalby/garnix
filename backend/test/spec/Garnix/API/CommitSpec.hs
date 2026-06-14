@@ -148,7 +148,7 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ describe 
 
       it "allows collaborators to see the commit" $ do
         user <- testUser "dev-user" "foo@example.com"
-        withGithubMock repoCollaboratorsLens (\_ _ _ -> pure $ GhCollaborators ["dev-user"]) $ do
+        withGithubMock repoCollaboratorsLens (\_ _ _ -> pure $ Collaborators ["dev-user"]) $ do
           foo <- testBuild $ (gitCommit .~ "aaaaaa") . (package .~ "foo") . (startTime .~ parseTimestamp "2010-03-04T01:00:00Z") . (repoIsPublic .~ RepoIsPublic False)
           testCommit $ hash .~ "aaaaaa"
           result <- try $ getSingleCommit (Just user) "aaaaaa"
@@ -322,7 +322,7 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ describe 
             |]
 
   describe "/api/commits/repo/<owner>/<name>" $ do
-    let mkTestCommits :: GhRepoOwner -> GhRepoName -> M (Build, Build)
+    let mkTestCommits :: RepoOwner -> RepoName -> M (Build, Build)
         mkTestCommits targetRepoOwner targetRepoName = do
           repoPublicity <- getRepoPublicity undefined targetRepoOwner targetRepoName
           [commitA : _, commitB : _] <- forM ["aaaaaa", "bbbbbb"] $ \commit -> do
@@ -385,10 +385,10 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ describe 
 
     it "returns commits for a private repo where the user is the owner" $ GH.withFakeGithubInterface $ \st -> withServer $ \testServer -> do
       user <- testServer.login
-      let owner = GhRepoOwner $ user ^. githubLogin
+      let owner = RepoOwner $ user ^. githubLogin
       GH.mkRepo st owner "target-repo" $ #publicity .~ RepoIsPublic False
       void $ mkTestCommits owner "target-repo"
-      result <- assert200 $ testServer.get $ "/api/commits/repo/" <> cs (getGhLogin $ user ^. githubLogin) <> "/target-repo"
+      result <- assert200 $ testServer.get $ "/api/commits/repo/" <> cs (getForgeLogin $ user ^. githubLogin) <> "/target-repo"
       liftIO $ length (result ^?! responseBody . key "commits" . _Array) `shouldBe` 2
 
     it "returns empty list for a repo that has no commits" $ GH.withFakeGithubInterface $ \st -> withServer $ \testServer -> do
@@ -452,7 +452,7 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ describe 
         }
       |]
 
-testUser :: GhLogin -> Email -> M User
+testUser :: ForgeLogin -> Email -> M User
 testUser ghLogin email =
   DB.newUser
     ghLogin

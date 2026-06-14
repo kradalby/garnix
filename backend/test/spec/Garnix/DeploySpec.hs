@@ -30,6 +30,8 @@ import Garnix.Monad.Async (emptyPromise, resolve)
 import Garnix.MonetaryCost
 import Garnix.Orchestrator qualified as Orchestrator
 import Garnix.Prelude hiding (head)
+import Garnix.GithubInterface (githubRepoInfo)
+import Garnix.TestHelpers.GithubInterface.Internal (fakeRepoInfo)
 import Garnix.TestHelpers hiding (shouldReturn)
 import Garnix.TestHelpers.Common
 import Garnix.TestHelpers.Deprecated qualified as Deprecated
@@ -101,7 +103,7 @@ spec = do
           forM_ firstGenServers assertNotExists
 
       context "persistence" $ do
-        let commitInfo c = CommitInfo "owner" (RepoIsPublic True) (RepoInfo undefined undefined "owner" "repo") (Just "branch") Nothing c
+        let commitInfo c = CommitInfo "owner" (RepoIsPublic True) (fakeRepoInfo "owner" "repo") (Just "branch") Nothing c
             flake = flakeWithPersistence True "db" "db" "local"
             yaml = Just $ getMultiConfig "branch" [PackageName "db"]
             branch = "branch"
@@ -263,7 +265,7 @@ spec = do
           liftIO $ cs result `shouldStartWith` "AGE-SECRET-KEY"
 
       context "stopUnusedServers" $ do
-        let commitInfo c = CommitInfo "owner" (RepoIsPublic True) (RepoInfo undefined undefined "owner" "repo") (Just "branch") Nothing c
+        let commitInfo c = CommitInfo "owner" (RepoIsPublic True) (fakeRepoInfo "owner" "repo") (Just "branch") Nothing c
             flake = flakeWithPersistence True "db" "db" "local"
             yaml = Just $ onPullRequestConfig (PackageName "db")
             branch = "branch"
@@ -573,8 +575,8 @@ spec = do
         liftIO $ T.writeFile (dir </> "garnix.yaml") $ cs garnixYaml
         void $ createBuildsFor user name branchName commit [("foo", Nothing), ("bar", Nothing)]
         iAuth <- getInstallation $ Github.Data.Id 42
-        let repoInfo = RepoInfo iAuth (GhToken "test-token") user name
-        let commitInfo = CommitInfo (getGhRepoOwner user) (RepoIsPublic True) repoInfo (Just branchName) Nothing commit
+        let repoInfo = githubRepoInfo iAuth (ForgeToken "test-token") user name
+        let commitInfo = CommitInfo (getRepoOwner user) (RepoIsPublic True) repoInfo (Just branchName) Nothing commit
         void
           $ withPrivateNixXdgCache
           $ rolloutNewServerVersion mempty commitInfo (BranchDeployment branchName)
@@ -806,7 +808,7 @@ spec = do
         void $ addTestServer $ \server ->
           server
             & configurationBuildId .~ (buildA ^. id)
-            & pullRequest ?~ GhPullRequestId (fromIntegral $ prEvent ^. number)
+            & pullRequest ?~ PullRequestId (fromIntegral $ prEvent ^. number)
 
         mockRemote <- view #workingDir
         liftIO $ writeFile (mockRemote </> "some-added-file") "foo"
@@ -860,7 +862,7 @@ spec = do
             & package .~ "test-nix-config"
             & uploadedToCache ?~ True
         iAuth <- getInstallation $ Github.Data.Id 42
-        let repoInfo = RepoInfo iAuth (GhToken "test-token") "test-owner" "test-repo"
+        let repoInfo = githubRepoInfo iAuth (ForgeToken "test-token") "test-owner" "test-repo"
         let commitInfo = CommitInfo "test-owner" (RepoIsPublic True) repoInfo Nothing Nothing commit
         reports <- withTestReporter_ $ \testReporter -> do
           void $ try $ withPrivateNixXdgCache $ rolloutNewServerVersion testReporter commitInfo (GhPrDeployment 42)
@@ -966,7 +968,7 @@ spec = do
             }
         mkRepoInfo = do
           iAuth <- getInstallation $ Github.Data.Id 42
-          pure $ RepoInfo iAuth (GhToken "test-token") user name
+          pure $ githubRepoInfo iAuth (ForgeToken "test-token") user name
 
     it "allows larger servers with individual-v1 plan" $ do
       void
@@ -1047,7 +1049,7 @@ withContext event action = do
           ON CONFLICT DO NOTHING
       |]
   iAuth <- getInstallation $ Github.Data.Id 42
-  let repoInfo = RepoInfo iAuth (GhToken "test-token") owner name
+  let repoInfo = githubRepoInfo iAuth (ForgeToken "test-token") owner name
   withPrivateNixXdgCache $ action repoInfo branch
 
 doABuild :: Text -> CheckSuiteEvent -> RepoInfo -> M CommitInfo
@@ -1060,7 +1062,7 @@ doABuild flake event repoInfo = do
   notifyOfCommit event
   pure
     $ CommitInfo
-      { _commitInfoReqUser = GhLogin . whUserLogin $ senderOfEvent event,
+      { _commitInfoReqUser = ForgeLogin . whUserLogin $ senderOfEvent event,
         _commitInfoRepoPublicity = RepoIsPublic . not . whRepoIsPrivate $ repoForEvent event,
         _commitInfoRepoInfo = repoInfo,
         _commitInfoBranch = Branch <$> whCheckSuiteHeadBranch (evCheckSuiteCheckSuite event),
@@ -1501,7 +1503,7 @@ addPrHostingEntitlement = do
           ('owner', 'pr-hosting-beta')
       |]
 
-createBuildsFor :: GhRepoOwner -> GhRepoName -> Branch -> CommitHash -> [(PackageName, Maybe Text)] -> M [Build]
+createBuildsFor :: RepoOwner -> RepoName -> Branch -> CommitHash -> [(PackageName, Maybe Text)] -> M [Build]
 createBuildsFor user name branchName commit machines = do
   overallBuild <- testBuild $ \build ->
     build
@@ -1522,8 +1524,8 @@ createBuildsFor user name branchName commit machines = do
         & uploadedToCache ?~ True
 
 deployNewServerFor ::
-  GhRepoOwner ->
-  GhRepoName ->
+  RepoOwner ->
+  RepoName ->
   Branch ->
   CommitHash ->
   [(PackageName, Maybe Text)] ->
@@ -1532,8 +1534,8 @@ deployNewServerFor user name branchName commit machineNames = do
   writeMultiConfig branchName $ fmap fst machineNames
   void $ createBuildsFor user name branchName commit machineNames
   iAuth <- getInstallation $ Github.Data.Id 42
-  let repoInfo = RepoInfo iAuth (GhToken "test-token") user name
-  let commitInfo = CommitInfo (getGhRepoOwner user) (RepoIsPublic True) repoInfo (Just branchName) Nothing commit
+  let repoInfo = githubRepoInfo iAuth (ForgeToken "test-token") user name
+  let commitInfo = CommitInfo (getRepoOwner user) (RepoIsPublic True) repoInfo (Just branchName) Nothing commit
   withPrivateNixXdgCache
     $ rolloutNewServerVersion mempty commitInfo (BranchDeployment branchName)
 

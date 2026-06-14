@@ -18,9 +18,9 @@ import Data.Text qualified as T
 import Data.Time
 import Data.Time.Format.ISO8601
 import Garnix.BuildLogs.Types (LogLine (LogLine))
-import Garnix.Monad
+import Garnix.Monad hiding (commit)
 import Garnix.Prelude
-import Garnix.Types hiding (branch, commit, repoName, repoOwner, statusCode)
+import Garnix.Types hiding (branch, repoName, repoOwner, statusCode)
 import Garnix.Types qualified
 import Network.HTTP.Types (Status (statusCode), statusIsSuccessful)
 import Network.Wreq qualified as Wreq
@@ -69,11 +69,11 @@ toHashId (FromRun id) = getRunId id
 toHashId (FromBuild id) = getBuildId id
 
 data AdditionalMetadata = AdditionalMetadata
-  { repoOwner :: GhRepoOwner,
-    repoName :: GhRepoName,
+  { repoOwner :: RepoOwner,
+    repoName :: RepoName,
     branch :: Maybe Branch,
     commit :: CommitHash,
-    requestingUser :: GhLogin
+    requestingUser :: ForgeLogin
   }
   deriving stock (Eq, Show, Generic)
 

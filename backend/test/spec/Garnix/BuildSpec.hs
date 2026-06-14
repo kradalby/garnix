@@ -33,6 +33,7 @@ import Garnix.Orchestrator
 import Garnix.Prelude
 import Garnix.Reporters.GithubReporter (mkGithubReporter)
 import Garnix.Reporters.OpenSearchReporter (openSearchReporter)
+import Garnix.GithubInterface (githubRepoInfo)
 import Garnix.TestHelpers
 import Garnix.TestHelpers.Common
 import Garnix.TestHelpers.GithubInterface qualified as GH
@@ -100,7 +101,7 @@ spec = do
                     };
                   }
                 |]
-        user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+        user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
         GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup flake) $ \commitInfo -> do
           testHandleCommit commitInfo
           build <- fromSingleton <$> filter (\b -> b ^. packageType /= TypeOverall) <$> DB.getBuilds user
@@ -110,7 +111,7 @@ spec = do
           logLines `shouldContainM` [(Just "succeeding", "test build log")]
 
       it "skips builds if the same repoOwner, repoName, commit, and branch are pushed multiple times" $ GH.withFakeGithubInterface $ \ghState -> do
-        user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+        user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
         GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup "{ outputs = {self}: { packages = {}; }; }") $ \commitInfo -> do
           let reporter = mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit) <> openSearchReporter
           resolve =<< handleCommit reporter False commitInfo
@@ -134,7 +135,7 @@ spec = do
                       };
                     }
                   |]
-          user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+          user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
           GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup flake) $ \commitInfo -> do
             testHandleCommit commitInfo
             build1 <-
@@ -158,7 +159,7 @@ spec = do
                       };
                     }
                   |]
-          user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+          user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
           GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup flake) $ \commitInfo -> do
             void $ try $ testHandleCommit commitInfo
             build <-
@@ -322,7 +323,7 @@ spec = do
 
       it "should report build result to the database" $ do
         GH.withFakeGithubInterface $ \ghState -> do
-          user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+          user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
           GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup "{ outputs = {self}: { packages = {}; }; }") $ \commitInfo -> do
             testHandleCommit commitInfo
             build <- fromSingleton <$> DB.getBuilds user
@@ -330,7 +331,7 @@ spec = do
 
       it "should report build end time to the database" $ do
         GH.withFakeGithubInterface $ \ghState -> do
-          user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+          user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
           GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup "{ outputs = {self}: { packages = {}; }; }") $ \commitInfo -> do
             beforeBuild <- liftIO getCurrentTime
             testHandleCommit commitInfo
@@ -342,7 +343,7 @@ spec = do
                 Nothing -> False
 
       it "should not allow unauthenticated users to view private repos" $ do
-        user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+        user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
         GH.withFakeGithubInterface $ \ghState -> do
           let commitInfo = defaultCommitInfo & repoPublicity .~ RepoIsPublic False
           GH.withLocalRepo ghState "owner" "repo" identity commitInfo (GH.simpleSetup "{ outputs = _: {}; }") $ \commitInfo -> do
@@ -367,12 +368,13 @@ spec = do
                   }
                 |]
         GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup flake) $ \commitInfo -> do
-          curGithubIface <- (^. #githubInterface) <$> ask
-          let throwingGithubIface = curGithubIface {_githubInterfaceUpdateBuildReport = const $ const $ const $ throw $ OtherError "failed to update build report"}
-          local (#githubInterface .~ throwingGithubIface) $ testHandleCommit commitInfo
+          withGithubMock
+            updateBuildReportLens
+            (const $ const $ const $ throw $ OtherError "failed to update build report")
+            $ testHandleCommit commitInfo
 
       it "adds the build output paths to the builds table" $ GH.withFakeGithubInterface $ \ghState -> do
-        user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+        user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
         randomness :: Int <- randomIO
         let flake =
               cs
@@ -401,7 +403,7 @@ spec = do
           Nix.getOutputByName "bar" outputs `shouldSatisfyM` isJust
 
       it "reports the correct url for builds" $ GH.withFakeGithubInterface $ \ghState -> do
-        user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+        user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
         GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup "{ outputs = _: {}; }") $ \commitInfo -> do
           testHandleCommit commitInfo
           build <- fromSingleton <$> DB.getBuilds user
@@ -618,7 +620,7 @@ spec = do
               shouldIncrementalize ghState commit'
 
       it "should allow unauthenticated users to view public repos" $ do
-        user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+        user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
         GH.withFakeGithubInterface $ \ghState -> do
           let commitInfo = defaultCommitInfo & repoPublicity .~ RepoIsPublic True
           GH.withLocalRepo ghState "owner" "repo" identity commitInfo (GH.simpleSetup "{ outputs = _: {}; }") $ \commitInfo -> do
@@ -655,7 +657,7 @@ spec = do
       it "respects the extra ci minutes if all plan minutes are used" $ do
         let flake = "{ outputs = {self}: { packages = {}; }; }"
         GH.withFakeGithubInterface $ \ghState -> do
-          user <- DB.newUser (GhLogin "owner") "owner@owner.com" FreeSubscription True
+          user <- DB.newUser (ForgeLogin "owner") "owner@owner.com" FreeSubscription True
           GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup flake) $ \commitInfo -> do
             useUpAllBuildQuota "owner"
             setExtraUsageLimits "owner" (emptyUsageLimits & #ciTime .~ fromHours @Int 3)
@@ -892,7 +894,7 @@ spec = do
           GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup invalidFlake) $ \commitInfo -> do
             withGithubMock
               getRemoteLens
-              ( \_ -> do
+              ( \_ _ _ -> do
                   commit' <- DB.getCommit "owner" "repo" (commitInfo ^. commit)
                   (commit' ^? _Just . status) `shouldBeM` Just Evaluating
                   throw $ OtherError "test should stop here"
@@ -974,7 +976,7 @@ spec = do
                 let event =
                       RerunEvent
                         { reqUser = "owner",
-                          ghRunId = fromJust $ build ^. githubRunId,
+                          originalBuildId = build ^. id,
                           installAuth = undefined,
                           token = undefined,
                           repoIsPublic = RepoIsPublic True
@@ -1200,7 +1202,7 @@ spec = do
               CommitInfo
                 (user ^. githubLogin)
                 (RepoIsPublic True)
-                (RepoInfo undefined (GhToken "test-token") "owner" "repo")
+                (githubRepoInfo undefined (ForgeToken "test-token") "owner" "repo")
                 (Just "branch")
                 Nothing
                 commit
@@ -1256,7 +1258,7 @@ testHandleCommit commitInfo = do
   let reporter = mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit) <> openSearchReporter
   resolve =<< handleCommit reporter True commitInfo
 
-useUpAllBuildQuota :: GhRepoOwner -> M ()
+useUpAllBuildQuota :: RepoOwner -> M ()
 useUpAllBuildQuota owner = do
   addDefaultEntitlements owner
   ended <- liftIO getCurrentTime

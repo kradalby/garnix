@@ -47,7 +47,7 @@ import System.Random (randomIO)
 import Test.HUnit (assertFailure)
 import Test.Hspec (shouldBe)
 
-defaultFakeRepos :: [(GhRepoOwner, GhRepoName)]
+defaultFakeRepos :: [(RepoOwner, RepoName)]
 defaultFakeRepos =
   [ ("NixOS", "nixpkgs"),
     ("garnix-io", "incrementalize")
@@ -55,17 +55,17 @@ defaultFakeRepos =
 
 withFakeGithubInterface :: (GithubFakeState -> M a) -> M a
 withFakeGithubInterface action = do
-  (ghState, ghInterface) <- mkFakeGithubInterface
+  (ghState, fakeForge) <- mkFakeGithubInterface
   forM_ defaultFakeRepos $ \(owner, repo) -> mkRepo ghState owner repo identity
-  local (#githubInterface .~ ghInterface) $ action ghState
+  local (#forges .~ githubForgeRegistry fakeForge) $ action ghState
 
-mkRepo :: GithubFakeState -> GhRepoOwner -> GhRepoName -> (TestRepo -> TestRepo) -> M ()
+mkRepo :: GithubFakeState -> RepoOwner -> RepoName -> (TestRepo -> TestRepo) -> M ()
 mkRepo ghState = setRepoImpl ghState.repoCollection
 
-addOrgMembers :: GithubFakeState -> [GhUserOrgMembership] -> M ()
+addOrgMembers :: GithubFakeState -> [UserOrgMembership] -> M ()
 addOrgMembers ghState = addOrgMembersImpl ghState.orgMembersCollection
 
-lookupRepo :: GithubFakeState -> GhRepoOwner -> GhRepoName -> M (Maybe TestRepo)
+lookupRepo :: GithubFakeState -> RepoOwner -> RepoName -> M (Maybe TestRepo)
 lookupRepo ghState = lookupRepoImpl ghState.repoCollection
 
 getReports :: GithubFakeState -> M [[(RepoInfo, GhRunReport)]]
@@ -74,7 +74,7 @@ getReports ghState = getReportsImpl ghState.reportCollection
 getAllReportLogs :: GithubFakeState -> M [Text]
 getAllReportLogs ghState = fmap (getRawLogs . (^. logs) . snd) . join <$> getReports ghState
 
-withLocalRepo :: GithubFakeState -> GhRepoOwner -> GhRepoName -> (TestRepo -> TestRepo) -> CommitInfo -> (FilePath -> M ()) -> (CommitInfo -> M a) -> M a
+withLocalRepo :: GithubFakeState -> RepoOwner -> RepoName -> (TestRepo -> TestRepo) -> CommitInfo -> (FilePath -> M ()) -> (CommitInfo -> M a) -> M a
 withLocalRepo ghState owner name modify commitInfo setup action = do
   setRepoImpl ghState.repoCollection owner name modify
   withLocalRepoImpl ghState.repoCollection owner name commitInfo setup action

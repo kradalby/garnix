@@ -38,13 +38,11 @@ import Garnix.Nix.Types qualified as Nix
 import Garnix.Prelude
 import Garnix.Types.ExternalLenses
 import Garnix.Types.Keys
-import GitHub.App.Auth (InstallationAuth)
 import Network.HTTP.Types (Header, statusMessage)
 import Network.Wreq qualified as Wreq
 import Prettyprinter qualified as Pretty
 import Servant qualified
 import System.Log.FastLogger as FastLogger
-import Prelude qualified
 
 -- * System
 
@@ -297,7 +295,10 @@ data GhRun = GhRun
     _ghRunStatus :: Text,
     _ghRunOutput :: Maybe RunOutput,
     _ghRunDetailsUrl :: Maybe Text,
-    _ghRunConclusion :: Maybe Text
+    _ghRunConclusion :: Maybe Text,
+    -- | GitHub's @external_id@: our own build-id correlation key (see
+    -- 'Garnix.Monad.GhRunReport').
+    _ghRunExternalId :: Maybe Text
   }
   deriving stock (Eq, Ord, Show, Generic)
 
@@ -324,8 +325,8 @@ instance FromJSON RunOutput where parseJSON = ourParseJSON
 
 data Repo = Repo
   { _repoReqUser :: UserId,
-    _repoRepoUser :: GhRepoOwner,
-    _repoRepoName :: GhRepoName,
+    _repoRepoUser :: RepoOwner,
+    _repoRepoName :: RepoName,
     _repoEnabledAt :: UTCTime
   }
   deriving stock (Eq, Show, Generic)
@@ -337,8 +338,8 @@ instance ToJSON Repo where
 instance FromJSON Repo where parseJSON = ourParseJSON
 
 data UserOverviewRepo = UserOverviewRepo
-  { _userOverviewRepoRepoUser :: GhRepoOwner,
-    _userOverviewRepoRepoName :: GhRepoName,
+  { _userOverviewRepoRepoUser :: RepoOwner,
+    _userOverviewRepoRepoName :: RepoName,
     _userOverviewRepoEnabled :: Bool
   }
   deriving stock (Eq, Show, Generic)
@@ -413,8 +414,8 @@ outputsForBuild build = buildOutputs <$> _buildOutputPaths build
 
 data Build = Build
   { _buildId :: BuildId,
-    _buildRepoUser :: GhRepoOwner,
-    _buildRepoName :: GhRepoName,
+    _buildRepoUser :: RepoOwner,
+    _buildRepoName :: RepoName,
     _buildPrFromFork :: Maybe PrFromFork,
     _buildBranch :: Maybe Branch,
     _buildRepoIsPublic :: RepoPublicity,
@@ -422,13 +423,13 @@ data Build = Build
     _buildPackage :: PackageName,
     _buildPackageType :: PackageType,
     _buildSystem :: MaybeSystem,
-    _buildReqUser :: GhLogin,
+    _buildReqUser :: ForgeLogin,
     _buildStatus :: Maybe Status,
     _buildStartTime :: UTCTime,
     _buildEndTime :: Maybe UTCTime,
     _buildDrvPath :: Maybe FilePath,
     _buildOutputPaths :: Maybe BuildOutputsPgColumn,
-    _buildGithubRunId :: Maybe GhRunId,
+    _buildGithubRunId :: Maybe ForgeRunId,
     _buildPersistenceName :: Maybe Text,
     _buildWantsIncrementalism :: Bool,
     _buildEvalHost :: Maybe Text,
@@ -487,18 +488,18 @@ newtype RawLogs = RawLogs {getRawLogs :: Text}
 
 data BuildResponse = BuildResponse
   { _buildResponseId :: BuildId,
-    _buildResponseRepoUser :: GhRepoOwner,
-    _buildResponseRepoName :: GhRepoName,
+    _buildResponseRepoUser :: RepoOwner,
+    _buildResponseRepoName :: RepoName,
     _buildResponseGitCommit :: CommitHash,
     _buildResponsePackage :: PackageName,
     _buildResponsePackageType :: PackageType,
     _buildResponseSystem :: MaybeSystem,
-    _buildResponseReqUser :: GhLogin,
+    _buildResponseReqUser :: ForgeLogin,
     _buildResponseBranch :: Maybe Branch,
     _buildResponseStatus :: Maybe Status,
     _buildResponseStartTime :: UTCTime,
     _buildResponseEndTime :: Maybe UTCTime,
-    _buildResponseGithubRunId :: Maybe GhRunId,
+    _buildResponseGithubRunId :: Maybe ForgeRunId,
     _buildResponseOriginalBuild :: Maybe OriginalBuild,
     _buildResponseRelatedBuilds :: [OriginalBuild] -- deprecated
   }
@@ -673,8 +674,8 @@ instance Pretty CheckStatus where
   pretty = pretty . review asCheckStatus
 
 data Commit = Commit
-  { _commitRepoOwner :: GhRepoOwner,
-    _commitRepoName :: GhRepoName,
+  { _commitRepoOwner :: RepoOwner,
+    _commitRepoName :: RepoName,
     _commitHash :: CommitHash,
     _commitStatus :: CommitStatus,
     _commitMetaCheck :: CheckStatus
@@ -689,12 +690,12 @@ data FullCommitState
 data Run = Run
   { _runId :: RunId,
     _runName :: Text,
-    _runRepoUser :: GhRepoOwner,
-    _runRepoName :: GhRepoName,
+    _runRepoUser :: RepoOwner,
+    _runRepoName :: RepoName,
     _runGitCommit :: CommitHash,
     _runBranch :: Maybe Branch,
     _runStatus :: Maybe Status,
-    _runReqUser :: GhLogin,
+    _runReqUser :: ForgeLogin,
     _runStartTime :: UTCTime,
     _runEndTime :: Maybe UTCTime
   }
@@ -711,7 +712,7 @@ newtype RunId = RunId {getRunId :: HashId}
 -- * User
 
 --
-newtype RequestingGhLogin = RequestingGhLogin {getRequestingGhLogin :: GhLogin}
+newtype RequestingGhLogin = RequestingGhLogin {getRequestingGhLogin :: ForgeLogin}
   deriving stock (Eq, Show, Generic)
   deriving newtype
     ( ToJSON,
@@ -723,24 +724,7 @@ newtype RequestingGhLogin = RequestingGhLogin {getRequestingGhLogin :: GhLogin}
       IsString
     )
 
-newtype GhRepoOwner = GhRepoOwner {getGhRepoOwner :: GhLogin}
-  deriving stock (Eq, Show, Generic)
-  deriving newtype
-    ( ToJSON,
-      FromJSON,
-      ToJSONKey,
-      Ord,
-      Servant.FromHttpApiData,
-      Servant.ToHttpApiData,
-      PGParameter "character varying",
-      PGParameter "text",
-      PGColumn "character varying",
-      PGColumn "text",
-      Pretty,
-      IsString
-    )
-
-newtype GhLogin = GhLogin {getGhLogin :: Text}
+newtype RepoOwner = RepoOwner {getRepoOwner :: ForgeLogin}
   deriving stock (Eq, Show, Generic)
   deriving newtype
     ( ToJSON,
@@ -757,7 +741,24 @@ newtype GhLogin = GhLogin {getGhLogin :: Text}
       IsString
     )
 
-newtype GhRepoName = GhRepoName {getGhRepoName :: Text}
+newtype ForgeLogin = ForgeLogin {getForgeLogin :: Text}
+  deriving stock (Eq, Show, Generic)
+  deriving newtype
+    ( ToJSON,
+      FromJSON,
+      ToJSONKey,
+      Ord,
+      Servant.FromHttpApiData,
+      Servant.ToHttpApiData,
+      PGParameter "character varying",
+      PGParameter "text",
+      PGColumn "character varying",
+      PGColumn "text",
+      Pretty,
+      IsString
+    )
+
+newtype RepoName = RepoName {getRepoName :: Text}
   deriving stock (Eq, Show, Generic)
   deriving newtype
     ( ToJSON,
@@ -867,7 +868,7 @@ instance Project Text Branch where prj = cs
 
 instance Isomorphic Text Branch
 
-newtype GhPullRequestId = GhPullRequestId {getGhPullRequestId :: Int64}
+newtype PullRequestId = PullRequestId {getPullRequestId :: Int64}
   deriving stock (Eq, Show)
   deriving newtype
     ( Num,
@@ -885,7 +886,7 @@ instance (Project a b, Functor f) => Project (f a) (f b) where
 
 instance (Inject a b, Project a b, Functor f) => Isomorphic (f a) (f b)
 
-newtype GhToken = GhToken {getGhToken :: Text}
+newtype ForgeToken = ForgeToken {getForgeToken :: Text}
   deriving stock (Eq, Show, Generic)
   deriving newtype (ToJSON, FromJSON, Servant.FromHttpApiData, Servant.ToHttpApiData)
 
@@ -894,12 +895,12 @@ obfuscateGithubToken =
   [RE.regex|gh[pousr]_\w{15,255}|] . RE.match .~ "XXXXXXXXXXXXXXXX"
 
 data CommitSummary = CommitSummary
-  { _commitSummaryRepoOwner :: GhRepoOwner,
-    _commitSummaryRepoName :: GhRepoName,
+  { _commitSummaryRepoOwner :: RepoOwner,
+    _commitSummaryRepoName :: RepoName,
     _commitSummaryRepoIsPublic :: RepoPublicity,
     _commitSummaryGitCommit :: CommitHash,
     _commitSummaryBranch :: Maybe Branch,
-    _commitSummaryReqUser :: GhLogin,
+    _commitSummaryReqUser :: ForgeLogin,
     _commitSummaryStartTime :: UTCTime,
     _commitSummarySucceeded :: Int64,
     _commitSummaryFailed :: Int64,
@@ -967,16 +968,16 @@ data Error
       }
   | DecodeError {original :: Text, message :: Text}
   | NoSuchBuild {buildId :: BuildId}
-  | NoSuchBuildRunId {ghRunId :: GhRunId}
+  | NoSuchBuildRunId {ghRunId :: ForgeRunId}
   | NoSuchRun {runId :: RunId}
   | NoSuchCommit CommitHash
-  | NoSuchRepo {_owner :: GhRepoOwner, _name :: GhRepoName}
-  | NoSuchUser GhLogin
+  | NoSuchRepo {_owner :: RepoOwner, _name :: RepoName}
+  | NoSuchUser ForgeLogin
   | ErrorGettingBuildPlan {message :: Text}
   | ErrorGettingAttributesToBuild {message :: Text}
   | IsDeniedAccess
   | DuplicateBuild
-  | UserAlreadyExists GhLogin
+  | UserAlreadyExists ForgeLogin
   | DbError {statement :: Text, message :: Text}
   | ProvisioningError {message :: Text}
   | ActivationError {serverInfo :: ServerInfo, stdErr :: Text}
@@ -1002,7 +1003,7 @@ data Error
   | InvalidBuildUpdate {buildUpdateBody :: BuildUpdate}
   | FailedToParseDrvFile {drvFile :: FilePath, message :: Text}
   | CachedError {inner :: ErrorWithContext}
-  | GarnixAppUnauthorized GhRepoOwner GhRepoName
+  | GarnixAppUnauthorized RepoOwner RepoName
   | GithubRequestTimeout
   | FailedToParseCreateReportResult Aeson.Value
   | ModuleErrorFlakeExists
@@ -1019,7 +1020,7 @@ instance Pretty Error where
     UncaughtRuntimeException {message} -> "runtime exception:" <+> pretty message
     NoSuchUser user ->
       "No user with github login"
-        <+> pretty (getGhLogin user)
+        <+> pretty (getForgeLogin user)
         <+> "could be found"
     NoSuchBuild {} ->
       "No build matching that description could be found."
@@ -1039,15 +1040,15 @@ instance Pretty Error where
         <+> "Either it doesn't exist, or you don't have access to it."
     NoSuchRepo {..} ->
       "The repo https://github.com/"
-        <> pretty (getGhLogin (getGhRepoOwner _owner))
+        <> pretty (getForgeLogin (getRepoOwner _owner))
         <> "/"
-        <> pretty (getGhRepoName _name)
+        <> pretty (getRepoName _name)
         <> " doesn't exist, has not enabled garnix, or you don't have access to it."
     IsDeniedAccess ->
       "This request has been denied. Anomalous activity detected. Please contact contact@garnix.io for more information."
     UserAlreadyExists user ->
       "User with github login"
-        <+> pretty (getGhLogin user)
+        <+> pretty (getForgeLogin user)
         <+> "already exists"
     GithubDidntGiveUsAToken -> "Github didn't give us a user token"
     DecodeError {..} ->
@@ -1229,9 +1230,9 @@ toErrorDetails e = case err e of
   NoSuchRepo {..} ->
     errorDetails 404
       $ "The repo https://github.com/"
-      <> getGhLogin (getGhRepoOwner _owner)
+      <> getForgeLogin (getRepoOwner _owner)
       <> "/"
-      <> getGhRepoName _name
+      <> getRepoName _name
       <> " doesn't exist, has not enabled garnix, or you don't have access to it."
   FailedToParseDrvFile {drvFile, message} -> errorDetails 500 $ "Failed to parse drv file " <> cs drvFile <> ": " <> message
   CachedError inner ->
@@ -1239,7 +1240,7 @@ toErrorDetails e = case err e of
      in details
           { userMessage = "(cached error) " <> userMessage details
           }
-  GarnixAppUnauthorized (GhRepoOwner (GhLogin owner)) (GhRepoName repo) ->
+  GarnixAppUnauthorized (RepoOwner (ForgeLogin owner)) (RepoName repo) ->
     errorDetails 403 $ "The Garnix application does not have enough rights or was removed from '" <> show owner <> "/" <> show repo <> "'"
   GithubRequestTimeout -> errorDetails 503 "Request timeout when talking with Github."
   FailedToParseCreateReportResult _ -> errorDetails 500 "Internal error when creating report."
@@ -1287,7 +1288,7 @@ newtype UserId = UserId {getUserId :: Int32}
 
 data User = User
   { _userId :: UserId,
-    _userGithubLogin :: GhLogin,
+    _userGithubLogin :: ForgeLogin,
     _userEmail :: Email,
     _userSubscriptionType :: SubscriptionType,
     _userCreatedAt :: UTCTime
@@ -1300,7 +1301,7 @@ instance ToJSON User where
 
 instance FromJSON User where parseJSON = ourParseJSON
 
-data AuthJwtPayload = WebSession User GhToken | ApiSession User
+data AuthJwtPayload = WebSession User ForgeToken | ApiSession User
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJWT, FromJWT)
 
@@ -1364,7 +1365,7 @@ instance ToJSON InstallationStatus where
 
 data CreatingUser a = CreatingUser
   { _creatingUserExists :: Bool,
-    _creatingUserGithubLogin :: GhLogin,
+    _creatingUserGithubLogin :: ForgeLogin,
     _creatingUserEmail :: Email,
     _creatingUserGithubToken :: a
   }
@@ -1428,7 +1429,7 @@ newtype OAuthCode = OAuthCode {getOAuthCode :: T.Text}
   deriving newtype (ToJSON, FromJSON, Servant.FromHttpApiData, Servant.ToHttpApiData)
 
 -- | Yes this really must be at least Int64
-newtype GhRunId = GhRunId {getGhRunId :: Int64}
+newtype ForgeRunId = ForgeRunId {getForgeRunId :: Int64}
   deriving stock (Eq, Generic)
   deriving newtype
     ( ToJSON,
@@ -1506,7 +1507,7 @@ data ServerInfo = ServerInfo
     _serverInfoCreatedAt :: UTCTime,
     _serverInfoEndedAt :: Maybe UTCTime,
     _serverInfoConfigurationBuildId :: BuildId,
-    _serverInfoPullRequest :: Maybe GhPullRequestId,
+    _serverInfoPullRequest :: Maybe PullRequestId,
     _serverInfoReadyAt :: Maybe UTCTime,
     _serverInfoBuildPersistenceName :: Maybe Text,
     _serverInfoTier :: ServerTier,
@@ -1533,18 +1534,18 @@ instance Pretty ServerInfo where
 
 data DeploymentType
   = BranchDeployment Branch
-  | GhPrDeployment GhPullRequestId
+  | GhPrDeployment PullRequestId
   deriving stock (Eq, Show, Generic)
 
 instance ToJSON DeploymentType where
   toJSON = ourToJSON
 
-fromDeploymentType :: (Branch -> a) -> (GhPullRequestId -> a) -> DeploymentType -> a
+fromDeploymentType :: (Branch -> a) -> (PullRequestId -> a) -> DeploymentType -> a
 fromDeploymentType a b = \case
   BranchDeployment branch -> a branch
   GhPrDeployment prId -> b prId
 
-ghPrDeployment :: DeploymentType -> Maybe GhPullRequestId
+ghPrDeployment :: DeploymentType -> Maybe PullRequestId
 ghPrDeployment = fromDeploymentType (const Nothing) Just
 
 data PreprovisionedServer = PreprovisionedServer
@@ -1631,18 +1632,18 @@ hostToDomainName :: Host -> Text
 hostToDomainName host =
   getPackageName (_hostPackageName host)
     <> "."
-    <> maybe (getBranch (_hostBranch host)) (("pull-" <>) . show . getGhPullRequestId) (_hostPullRequest host)
+    <> maybe (getBranch (_hostBranch host)) (("pull-" <>) . show . getPullRequestId) (_hostPullRequest host)
     <> "."
-    <> getGhRepoName (_hostRepoName host)
+    <> getRepoName (_hostRepoName host)
     <> "."
-    <> getGhLogin (getGhRepoOwner (_hostRepoOwner host))
+    <> getForgeLogin (getRepoOwner (_hostRepoOwner host))
 
 data Host = Host
-  { _hostRepoOwner :: GhRepoOwner,
-    _hostRepoName :: GhRepoName,
+  { _hostRepoOwner :: RepoOwner,
+    _hostRepoName :: RepoName,
     _hostBranch :: Branch,
     _hostPackageName :: PackageName,
-    _hostPullRequest :: Maybe GhPullRequestId,
+    _hostPullRequest :: Maybe PullRequestId,
     _hostIpV4Addr :: Text,
     _hostIpV6Addr :: Text,
     _hostDrvPath :: Maybe FilePath,
@@ -1676,26 +1677,9 @@ instance ToJSON OpenSearchMessage where
 
 -- * combined data types
 
-data CommitInfo = CommitInfo
-  { _commitInfoReqUser :: GhLogin,
-    _commitInfoRepoPublicity :: RepoPublicity,
-    _commitInfoRepoInfo :: RepoInfo,
-    _commitInfoBranch :: Maybe Branch,
-    _commitInfoPrFromFork :: Maybe PrFromFork,
-    _commitInfoCommit :: CommitHash
-  }
-  deriving stock (Show)
-
-data RepoInfo = RepoInfo
-  { _repoInfoInstallationAuth :: InstallationAuth,
-    _repoInfoGhToken :: GhToken,
-    _repoInfoGhRepoOwner :: GhRepoOwner,
-    _repoInfoGhRepoName :: GhRepoName
-  }
-
-instance Show RepoInfo where
-  show (RepoInfo _iAuth _ghToken repoOwner repoName) =
-    "RepoInfo <iAuth> <ghToken>" <> unwords [Prelude.show repoOwner, Prelude.show repoName]
+-- NOTE: 'CommitInfo' and 'RepoInfo' moved to "Garnix.Monad" (they now carry the
+-- M-valued, kind-indexed forge bundle 'SomeForgeRepo', which cannot live this low
+-- in the module graph). They are re-exported from there.
 
 data PackageInfo = PackageInfo
   { _packageInfoPackageType :: PackageType,
@@ -1784,8 +1768,6 @@ makeFields ''CreateUser
 makeFields ''ServerInfo
 makeFields ''PreprovisionedServer
 makeFields ''Host
-makeFields ''CommitInfo
-makeFields ''RepoInfo
 makeFields ''PackageInfo
 makeFields ''RepoConfig
 makeFields ''CommitSummary
@@ -1799,9 +1781,7 @@ makePrisms ''Repo
 makePrisms ''Build
 makePrisms ''ServerInfo
 makePrisms ''Host
-makePrisms ''CommitInfo
 makePrisms ''PackageInfo
-makePrisms ''RepoInfo
 makePrisms ''CommitStatus
 makePrisms ''CheckStatus
 makePrisms ''Commit

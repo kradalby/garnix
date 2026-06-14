@@ -72,7 +72,7 @@ updateMetadata' ::
 updateMetadata' repoInfo deploymentType build (ServerId serverId) (HetznerServerId hetznerId) = do
   let (branchOrPr, branchOrPrValue) = case deploymentType of
         BranchDeployment (Branch branch) -> ("branch", branch)
-        GhPrDeployment (GhPullRequestId prId) -> ("pr", show prId)
+        GhPrDeployment (PullRequestId prId) -> ("pr", show prId)
   let json =
         [aesonQQ|
           {

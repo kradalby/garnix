@@ -42,7 +42,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogs $ do
     it "generates valid JWTs for the given user" $ do
       (user, accessToken) <- createApiAccessToken
       withServer $ \server -> do
-        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getGhLogin) (getAccessTokenText accessToken))] [aesonQQ| null |]
+        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getForgeLogin) (getAccessTokenText accessToken))] [aesonQQ| null |]
         let jwt = res ^?! responseBody . key "token" . _String
         res <- assert200 $ server.getWithHeaders "/api/whoami" [("Authorization", cs $ "Bearer " <> jwt)]
         Aeson.decode (res ^. responseBody)
@@ -58,7 +58,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogs $ do
     it "creates JWTs that expire after one hour" $ do
       (user, accessToken) <- createApiAccessToken
       withServer $ \server -> do
-        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getGhLogin) (getAccessTokenText accessToken))] ""
+        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getForgeLogin) (getAccessTokenText accessToken))] ""
         now <- liftIO getCurrentTime
         let expiresAt = res ^?! responseBody . key "expiresAt" . _String . to cs . to parseTimestamp
         expiresAt `shouldSatisfyM` (<= addUTCTime (60 * 60) now)
@@ -82,14 +82,14 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogs $ do
     it "returns unauthorized for bad access tokens and does not expose why authentication failed to the user" $ do
       (user, _accessToken) <- createApiAccessToken
       withServer $ \server -> do
-        res <- server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getGhLogin) "bad-access-token")] [aesonQQ| null |]
+        res <- server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getForgeLogin) "bad-access-token")] [aesonQQ| null |]
         res `shouldHaveStatusCode` 401
         res ^. responseBody `shouldBeM` "Unauthorized"
 
     it "does not allow to use JWTs to create new session access tokens" $ do
       (user, accessToken) <- createApiAccessToken
       withServer $ \server -> do
-        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getGhLogin) (getAccessTokenText accessToken))] ""
+        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getForgeLogin) (getAccessTokenText accessToken))] ""
         let jwt = res ^?! responseBody . key "token" . _String
         res <- server.postWithHeaders "/api/account/tokens" [("Authorization", cs $ "Bearer " <> jwt)] [aesonQQ| { name: "test token", scopes: { api: true } } |]
         res ^. responseStatus `shouldBeM` forbidden403
@@ -98,7 +98,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogs $ do
     it "does not allow to use JWTs to create new JWTs" $ do
       (user, accessToken) <- createApiAccessToken
       withServer $ \server -> do
-        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getGhLogin) (getAccessTokenText accessToken))] ""
+        res <- assert200 $ server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getForgeLogin) (getAccessTokenText accessToken))] ""
         let jwt = res ^?! responseBody . key "token" . _String
         res <- server.postWithHeaders "/api/auth/jwt" [("Authorization", cs $ "Bearer " <> jwt)] [aesonQQ| null |]
         res ^. responseStatus `shouldBeM` forbidden403
@@ -125,7 +125,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogs $ do
           assert200
             $ server.postWithHeaders
               "/api/auth/jwt"
-              [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getGhLogin) (getAccessTokenText accessToken))]
+              [("Authorization", cs $ encodeAuthHeader (user ^. githubLogin . to getForgeLogin) (getAccessTokenText accessToken))]
               [aesonQQ| null |]
         let jwt = res ^?! responseBody . key "token" . _String
         GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (GH.simpleSetup flake) $ \commitInfo -> do

@@ -11,6 +11,7 @@ import Data.Yaml.TH (yamlQQ)
 import Garnix.Monad
 import Garnix.Monad.Async (joinAll_, resolve, spawn)
 import Garnix.Prelude
+import Garnix.TestHelpers.GithubInterface.Internal (fakeRepoInfo)
 import Garnix.TestHelpers
 import Garnix.TestHelpers.Monad
 import Garnix.Types hiding (pending)
@@ -56,7 +57,7 @@ spec = around_ silence $ do
         `shouldBeM` cs [i|{"logLevel":"Informational","span_foo":"bar","message":"Some log message"}|]
 
     it "logs spans as json" $ do
-      let commitInfo = CommitInfo "owner" (RepoIsPublic True) (RepoInfo undefined undefined "owner" "repo") (Just "branch") Nothing "aaaaaa"
+      let commitInfo = CommitInfo "owner" (RepoIsPublic True) (fakeRepoInfo "owner" "repo") (Just "branch") Nothing "aaaaaa"
       [logEntry] <- captureLogLines_ $ withSpan commitInfo $ do
         log Informational "Some log message"
       let expected :: Value =

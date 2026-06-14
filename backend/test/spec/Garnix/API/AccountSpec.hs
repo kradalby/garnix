@@ -2,7 +2,7 @@
 
 module Garnix.API.AccountSpec where
 
-import Control.Lens (locally, (^?!))
+import Control.Lens ((^?!))
 import Control.Lens.Unsound (lensProduct)
 import Data.Aeson (Value)
 import Data.Aeson.KeyMap qualified as Aeson
@@ -41,12 +41,12 @@ import Garnix.Monad
 import Garnix.MonetaryCost
 import Garnix.Prelude
 import Garnix.StripeLib qualified as StripeLib
+import Garnix.Forge.Types
 import Garnix.TestHelpers
 import Garnix.TestHelpers.GithubInterface qualified as GH
 import Garnix.TestHelpers.Monad
 import Garnix.TestHelpers.WithServer
 import Garnix.Types hiding (Admin, context, head)
-import GitHub qualified as GH
 import Network.HTTP.Types (badRequest400)
 import Network.Wreq.Lens
 import Servant.Auth.Server (AuthResult (..))
@@ -55,16 +55,13 @@ import Test.Hspec
 spec :: Spec
 spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
   describe "AccountAPI" $ do
-    let mockGithubInterface :: GhToken -> [GhRepoOwner] -> M a -> M a
+    let mockGithubInterface :: ForgeToken -> [RepoOwner] -> M a -> M a
         mockGithubInterface expectedToken orgs =
-          locally
-            #githubInterface
-            ( \x ->
-                x
-                  { _githubInterfaceGetInstalledOrgs = \tok -> do
-                      liftIO $ tok `shouldBe` expectedToken
-                      pure $ map (`GhUserOrgMembership` Admin) orgs
-                  }
+          withGithubMock
+            installedOrgsLens
+            ( \tok -> do
+                liftIO $ tok `shouldBe` expectedToken
+                pure $ map (`UserOrgMembership` Admin) orgs
             )
 
     let getDefaultPlan = fromJust <$> Entitlements.getPlanByName Entitlements.defaultPlanName
@@ -72,38 +69,38 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
     describe "ci minutes" $ do
       it "reports empty usage when the user has no installations" $ do
         defaultPlan <- getDefaultPlan
-        mockGithubInterface (GhToken "user-with-no-builds") [] $ do
+        mockGithubInterface (ForgeToken "user-with-no-builds") [] $ do
           testUser <- mkTestUser
-          usage <- usageOverview $ pure $ WebSession testUser (GhToken "user-with-no-builds")
+          usage <- usageOverview $ pure $ WebSession testUser (ForgeToken "user-with-no-builds")
           liftIO $ usage `shouldBe` UsageOverview (fromList [("mock-user", OrgUsage defaultPlan emptyDuration emptyDuration 0 Nothing NoActiveInstallation)])
 
       it "reports empty usage when the user has no builds this month" $ do
         defaultPlan <- getDefaultPlan
         monthsAgo <- liftIO getCurrentTime <&> subTime (fromDays @Int 90)
-        mockGithubInterface (GhToken "user-with-one-org") [] $ do
+        mockGithubInterface (ForgeToken "user-with-one-org") [] $ do
           testUser <- mkTestUser
           _ <- addTestBuild "owner" monthsAgo (fromSeconds @Int 100)
           _ <- addTestBuild "owner" monthsAgo (fromSeconds @Int 100)
-          usage <- usageOverview $ pure $ WebSession testUser (GhToken "user-with-one-org")
+          usage <- usageOverview $ pure $ WebSession testUser (ForgeToken "user-with-one-org")
           liftIO $ usage `shouldBe` UsageOverview (fromList [("mock-user", OrgUsage defaultPlan emptyDuration emptyDuration 0 Nothing NoActiveInstallation)])
 
       it "reports usage of all build minutes for the user's installation" $ do
         defaultPlan <- getDefaultPlan
         now <- liftIO getCurrentTime
-        mockGithubInterface (GhToken "user-with-many-orgs") ["work-org", "org-with-no-builds"] $ do
+        mockGithubInterface (ForgeToken "user-with-many-orgs") ["work-org", "org-with-no-builds"] $ do
           testUser <- mkTestUser
           _ <- addTestBuild "mock-user" now (fromSeconds @Int 100)
           _ <- addTestBuild "mock-user" now (fromSeconds @Int 200)
           _ <- addTestBuild "work-org" now (fromSeconds @Int 400)
           _ <- addTestBuild "unrelated-org" now (fromSeconds @Int 100)
-          usage <- usageOverview $ pure $ WebSession testUser (GhToken "user-with-many-orgs")
+          usage <- usageOverview $ pure $ WebSession testUser (ForgeToken "user-with-many-orgs")
           liftIO
             $ usage
             `shouldBe` UsageOverview
               ( fromList
-                  [ (GhRepoOwner $ GhLogin "org-with-no-builds", OrgUsage defaultPlan emptyDuration emptyDuration 0 Nothing NoActiveInstallation),
-                    (GhRepoOwner $ GhLogin "mock-user", OrgUsage defaultPlan (fromSeconds @Int 300) emptyDuration 0 Nothing NoActiveInstallation),
-                    (GhRepoOwner $ GhLogin "work-org", OrgUsage defaultPlan (fromSeconds @Int 400) emptyDuration 0 Nothing NoActiveInstallation)
+                  [ (RepoOwner $ ForgeLogin "org-with-no-builds", OrgUsage defaultPlan emptyDuration emptyDuration 0 Nothing NoActiveInstallation),
+                    (RepoOwner $ ForgeLogin "mock-user", OrgUsage defaultPlan (fromSeconds @Int 300) emptyDuration 0 Nothing NoActiveInstallation),
+                    (RepoOwner $ ForgeLogin "work-org", OrgUsage defaultPlan (fromSeconds @Int 400) emptyDuration 0 Nothing NoActiveInstallation)
                   ]
               )
 
@@ -112,13 +109,13 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
             extraCiTime = fromHours @Int 20
         setExtraUsageLimits "mock-user" (Entitlements.emptyUsageLimits & #ciTime .~ extraCiTime)
         withTestEntitlement "test" (baseCiTime .~ planBaseCiTime) "mock-user" $ do
-          mockGithubInterface (GhToken "mock-user") [] $ do
+          mockGithubInterface (ForgeToken "mock-user") [] $ do
             testUser <- mkTestUser
-            usage <- usageOverview $ pure $ WebSession testUser (GhToken "mock-user")
+            usage <- usageOverview $ pure $ WebSession testUser (ForgeToken "mock-user")
             usage
               `shouldBeM` UsageOverview
                 ( fromList
-                    [ ( GhRepoOwner $ GhLogin "mock-user",
+                    [ ( RepoOwner $ ForgeLogin "mock-user",
                         OrgUsage
                           ( ProductPlan
                               { _productPlanDisplayName = "Plan Title for test",
@@ -146,13 +143,13 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       it "sums up pr deployment minutes" $ do
         defaultPlan <- getDefaultPlan
         now <- liftIO getCurrentTime
-        mockGithubInterface (GhToken "token") ["org"] $ do
+        mockGithubInterface (ForgeToken "token") ["org"] $ do
           testUser <- mkTestUser
           build <- addTestBuild "mock-user" now emptyDuration
           addServer build (Just 42) now (Just $ fromSeconds @Int 1)
           build <- addTestBuild "org" now emptyDuration
           addServer build (Just 42) now (Just $ fromSeconds @Int 2)
-          usage <- usageOverview (pure $ WebSession testUser (GhToken "token"))
+          usage <- usageOverview (pure $ WebSession testUser (ForgeToken "token"))
           liftIO
             $ usage
             `shouldBe` UsageOverview
@@ -184,14 +181,14 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       it "returns the number of running hosts" $ do
         defaultPlan <- getDefaultPlan
         now <- liftIO getCurrentTime
-        mockGithubInterface (GhToken "token") ["org"] $ do
+        mockGithubInterface (ForgeToken "token") ["org"] $ do
           testUser <- mkTestUser
           build <- addTestBuild "mock-user" now emptyDuration
           addServer build Nothing now Nothing
           build <- addTestBuild "org" now emptyDuration
           addServer build Nothing now Nothing
           addServer build Nothing now Nothing
-          usage <- usageOverview (pure $ WebSession testUser (GhToken "token"))
+          usage <- usageOverview (pure $ WebSession testUser (ForgeToken "token"))
           liftIO
             $ usage
             `shouldBe` UsageOverview
@@ -224,14 +221,14 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
         $ withTestEntitlement "test" identity "mock-user"
         $ do
           now <- liftIO getCurrentTime
-          mockGithubInterface (GhToken "token") [] $ do
+          mockGithubInterface (ForgeToken "token") [] $ do
             testUser <- mkTestUser
             _ <- addTestBuild "mock-user" now (fromSeconds @Int 50)
             (owner, usage) <-
-              usageOverview (pure $ WebSession testUser (GhToken "token"))
+              usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                 <&> fromSingleton . Map.toList . _usageOverviewByOrg
             liftIO $ do
-              owner `shouldBe` GhRepoOwner (GhLogin "mock-user")
+              owner `shouldBe` RepoOwner (ForgeLogin "mock-user")
               _orgUsagePlan usage
                 `shouldBe` ( ProductPlan
                                { _productPlanDisplayName = "Plan Title for test",
@@ -250,13 +247,13 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       it "returns the current plan of the user, when there's no builds"
         $ withTestEntitlement "test" identity "mock-user"
         $ do
-          mockGithubInterface (GhToken "token") [] $ do
+          mockGithubInterface (ForgeToken "token") [] $ do
             testUser <- mkTestUser
             (owner, usage) <-
-              usageOverview (pure $ WebSession testUser (GhToken "token"))
+              usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                 <&> fromSingleton . Map.toList . _usageOverviewByOrg
             liftIO $ do
-              owner `shouldBe` GhRepoOwner (GhLogin "mock-user")
+              owner `shouldBe` RepoOwner (ForgeLogin "mock-user")
               _orgUsagePlan usage
                 `shouldBe` ( ProductPlan
                                { _productPlanDisplayName = "Plan Title for test",
@@ -275,11 +272,11 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       it "returns plans for orgs that the user is an admin for (with usage)" $ do
         withTestEntitlement "test" identity "mock-org" $ do
           now <- liftIO getCurrentTime
-          mockGithubInterface (GhToken "token") ["mock-org"] $ do
+          mockGithubInterface (ForgeToken "token") ["mock-org"] $ do
             testUser <- mkTestUser
             _ <- addTestBuild "mock-org" now (fromSeconds @Int 50)
             usage <-
-              usageOverview (pure $ WebSession testUser (GhToken "token"))
+              usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                 <&> _usageOverviewByOrg
             liftIO $ do
               usage ! "mock-org"
@@ -305,10 +302,10 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
 
       it "returns plans for orgs that the user is an admin for (without usage)" $ do
         withTestEntitlement "test" identity "mock-org" $ do
-          mockGithubInterface (GhToken "token") ["mock-org"] $ do
+          mockGithubInterface (ForgeToken "token") ["mock-org"] $ do
             testUser <- mkTestUser
             usage <-
-              usageOverview (pure $ WebSession testUser (GhToken "token"))
+              usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                 <&> _usageOverviewByOrg
             liftIO $ do
               usage ! "mock-org"
@@ -335,15 +332,15 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       it "merges multiple plans into one" $ do
         withTestEntitlement "a" ((includedBranchDeploymentHosts .~ 2) . (maximumPrDeploymentTime .~ fromMinutes @Int 20) . (baseCiTime .~ fromMinutes @Int 200000)) "mock-user" $ do
           withTestEntitlement "b" ((includedBranchDeploymentHosts .~ 3) . (maximumPrDeploymentTime .~ fromMinutes @Int 30) . (baseCiTime .~ fromMinutes @Int 300000)) "mock-user" $ do
-            mockGithubInterface (GhToken "token") [] $ do
+            mockGithubInterface (ForgeToken "token") [] $ do
               testUser <- mkTestUser
               usage <-
-                usageOverview (pure $ WebSession testUser (GhToken "token"))
+                usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                   <&> _usageOverviewByOrg
               liftIO $ do
                 usage
                   `shouldBe` fromList
-                    [ ( GhRepoOwner (GhLogin "mock-user"),
+                    [ ( RepoOwner (ForgeLogin "mock-user"),
                         OrgUsage
                           ( ProductPlan
                               { _productPlanDisplayName = "Plan Title for a, Plan Title for b",
@@ -380,7 +377,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           it "hides plans without price ids" $ do
             testUser <- mkTestUser
             plan <-
-              usageOverview (pure $ WebSession testUser (GhToken "token"))
+              usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                 <&> (^. lensProduct displayName description)
                   . _orgUsagePlan
                   . (! "mock-user")
@@ -390,7 +387,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           it "returns the maximum for entitlements" $ do
             testUser <- mkTestUser
             entitlements <-
-              usageOverview (pure $ WebSession testUser (GhToken "token"))
+              usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                 <&> ( \p ->
                         ( p ^. includedBranchDeploymentHosts,
                           p ^. maximumPrDeploymentTime,
@@ -407,7 +404,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           withTestEntitlement "without-price-id" ((maximumPrDeploymentTime .~ fromMinutes @Int 400) . (isPaid .~ False)) "mock-user" $ do
             testUser <- mkTestUser
             entitlements <-
-              usageOverview (pure $ WebSession testUser (GhToken "token"))
+              usageOverview (pure $ WebSession testUser (ForgeToken "token"))
                 <&> ( \p ->
                         ( p ^. includedBranchDeploymentHosts,
                           p ^. maximumPrDeploymentTime,
@@ -445,15 +442,15 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       describe "upgradeOptions" $ do
         it "returns an upgrade option, when available" $ do
           withTestProduct "test" identity $ do
-            mockGithubInterface (GhToken "token") [] $ do
+            mockGithubInterface (ForgeToken "token") [] $ do
               testUser <- mkTestUser
-              options <- upgradeOptions (GhRepoOwner (testUser ^. githubLogin))
+              options <- upgradeOptions (RepoOwner (testUser ^. githubLogin))
               testPlan <- mkTestPlan
               liftIO $ options `shouldBe` Just testPlan
 
         it "does not return an upgrade option, when no product is marked visible" $ do
           withTestProduct "test" identity $ do
-            mockGithubInterface (GhToken "token") [] $ do
+            mockGithubInterface (ForgeToken "token") [] $ do
               1 <-
                 DB.pgExec
                   [pgSQL|
@@ -462,7 +459,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
                       WHERE products.name = 'test'
                   |]
               testUser <- mkTestUser
-              options <- upgradeOptions (GhRepoOwner (testUser ^. githubLogin))
+              options <- upgradeOptions (RepoOwner (testUser ^. githubLogin))
               liftIO $ options `shouldBe` Nothing
 
         it "does not offer non-visible products that have a price_id" $ do
@@ -476,21 +473,21 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
                       WHERE products.name = 'non-visible'
                   |]
               testUser <- mkTestUser
-              options <- upgradeOptions (GhRepoOwner (testUser ^. githubLogin))
+              options <- upgradeOptions (RepoOwner (testUser ^. githubLogin))
               liftIO $ (options ^? _Just . plan . displayName) `shouldBe` Just "Plan Title for visible"
 
         it "only offers products that the user is not subscribed to" $ do
           withTestEntitlement "test" identity "mock-user" $ do
-            mockGithubInterface (GhToken "token") [] $ do
+            mockGithubInterface (ForgeToken "token") [] $ do
               testUser <- mkTestUser
-              options <- upgradeOptions (GhRepoOwner (testUser ^. githubLogin))
+              options <- upgradeOptions (RepoOwner (testUser ^. githubLogin))
               liftIO $ options `shouldBe` Nothing
 
         it "offers plans when other users have subscriptions" $ do
           withTestEntitlement "test" identity "other-user" $ do
-            mockGithubInterface (GhToken "token") [] $ do
+            mockGithubInterface (ForgeToken "token") [] $ do
               testUser <- mkTestUser
-              options <- upgradeOptions (GhRepoOwner (testUser ^. githubLogin))
+              options <- upgradeOptions (RepoOwner (testUser ^. githubLogin))
               testPlan <- mkTestPlan
               liftIO $ options `shouldBe` Just testPlan
 
@@ -515,7 +512,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       $ aroundM_
         ( suppressLogs
             . withTestProduct "test" identity
-            . mockGithubInterface (GhToken "tok") ["test-org"]
+            . mockGithubInterface (ForgeToken "tok") ["test-org"]
         )
       $ do
         let testBody =
@@ -529,13 +526,13 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
 
         it "responds with status NoActiveInstallation if stripe has not ever sent us a subscription webhook" $ withServer $ \server -> do
           user <- server.login
-          void $ createSubscription (pure $ WebSession user (GhToken "tok")) testBody
+          void $ createSubscription (pure $ WebSession user (ForgeToken "tok")) testBody
           res <- assert200 $ server.get "/api/account/usage/test-org"
           res ^?! responseBody . key "installation_status" . _Value `shouldBeM` [aesonQQ| { tag: "NoActiveInstallation" } |]
 
         it "responds with status InstallationRenewing if the installation has a period attached to it" $ withServer $ \server -> do
           user <- server.login
-          void $ createSubscription (pure $ WebSession user (GhToken "tok")) testBody
+          void $ createSubscription (pure $ WebSession user (ForgeToken "tok")) testBody
           customerId <- fromJust <$> DB.getInstallationStripeCustomer "test-org"
           DB.updatePeriodForCustomer customerId (parseTimestamp "2025-04-05T00:00:00Z") (parseTimestamp "2025-05-05T00:00:00Z")
           res <- assert200 $ server.get "/api/account/usage/test-org"
@@ -543,7 +540,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
 
         it "responds with status InstallationCancelling if the installation has been cancelled" $ withServer $ \server -> do
           user <- server.login
-          void $ createSubscription (pure $ WebSession user (GhToken "tok")) testBody
+          void $ createSubscription (pure $ WebSession user (ForgeToken "tok")) testBody
           customerId <- fromJust <$> DB.getInstallationStripeCustomer "test-org"
           DB.updatePeriodForCustomer customerId (parseTimestamp "2025-04-05T00:00:00Z") (parseTimestamp "2025-05-05T00:00:00Z")
           void $ assert200 $ server.delete "/api/account/subscription/test-org"
@@ -555,7 +552,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           testBody =
             #product_token .== ProductToken "test-product-token"
               .+ #github_org .== org
-          token = GhToken "token"
+          token = ForgeToken "token"
 
       it "creates a new stripe customer"
         . withTestProduct "test" identity
@@ -606,9 +603,9 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           let testBodyWithUserAsOrg =
                 testBody
                   & #github_org
-                  .~ GhRepoOwner (user ^. githubLogin)
+                  .~ RepoOwner (user ^. githubLogin)
           void $ createSubscription (pure $ WebSession user token) testBodyWithUserAsOrg
-          customerId <- DB.getInstallationStripeCustomer $ GhRepoOwner $ user ^. githubLogin
+          customerId <- DB.getInstallationStripeCustomer $ RepoOwner $ user ^. githubLogin
           liftIO $ customerId `shouldBe` Just (CustomerId "test-customer-id-0")
 
     describe "handleSubscriptionAdded" $ do
@@ -617,12 +614,12 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
         $ do
           user <- mkDbTestUser
           let customerId = CustomerId "test-stripe-id"
-          DB.setStripeCustomerId (GhRepoOwner (user ^. githubLogin)) customerId
+          DB.setStripeCustomerId (RepoOwner (user ^. githubLogin)) customerId
           now <- liftIO getCurrentTime
           handleSubscriptionAdded $ StripeLib.SubscriptionCreatedOrUpdatedEvent StripeLib.Created customerId (StripeLib.PriceId "test-price") StripeLib.SubscriptionStatusActive now (addTime (fromDays @Int 30) now)
           plan <-
-            getPlans [GhRepoOwner $ user ^. githubLogin]
-              <&> (^. displayName) . (! GhRepoOwner (user ^. githubLogin))
+            getPlans [RepoOwner $ user ^. githubLogin]
+              <&> (^. displayName) . (! RepoOwner (user ^. githubLogin))
           liftIO $ plan `shouldBe` "Plan Title for test"
 
       it "adds products on SubscriptionCreatedOrUpdated events for org installations"
@@ -655,7 +652,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
             now <- liftIO getCurrentTime
             user <- mkDbTestUser
             let customerId = CustomerId "test-stripe-id"
-            let repoOwner = GhRepoOwner (user ^. githubLogin)
+            let repoOwner = RepoOwner (user ^. githubLogin)
             setExtraUsageLimits repoOwner extraLimits
             DB.setStripeCustomerId repoOwner customerId
             handleSubscriptionAdded $ StripeLib.SubscriptionCreatedOrUpdatedEvent StripeLib.Created customerId (StripeLib.PriceId "test-price") StripeLib.SubscriptionStatusActive now (addTime (fromDays @Int 30) now)
@@ -667,14 +664,14 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
             let num2HourBuilds = floor $ amount `divideDuration` fromHours @Int 2
                 finalBuildTime = amount `subtractDuration` fromHours (num2HourBuilds * 2)
             replicateM_ num2HourBuilds $ do
-              void $ addTestBuild (GhRepoOwner $ user ^. githubLogin) now (fromHours @Int 2)
-            void $ addTestBuild (GhRepoOwner $ user ^. githubLogin) now finalBuildTime
+              void $ addTestBuild (RepoOwner $ user ^. githubLogin) now (fromHours @Int 2)
+            void $ addTestBuild (RepoOwner $ user ^. githubLogin) now finalBuildTime
 
           useUpPrTime :: User -> Duration -> M ()
           useUpPrTime user amount =
             do
               now <- liftIO getCurrentTime
-              testBuild <- addTestBuild (GhRepoOwner $ user ^. githubLogin) now emptyDuration
+              testBuild <- addTestBuild (RepoOwner $ user ^. githubLogin) now emptyDuration
               void
                 $ addTestServer
                 $ (pullRequest ?~ 123)
@@ -683,11 +680,11 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
                 . (readyAt ?~ now)
                 . (endedAt ?~ addTime amount now)
 
-          mkTestServer :: User -> GhRepoName -> PackageName -> (ServerInfo -> ServerInfo) -> M ()
+          mkTestServer :: User -> RepoName -> PackageName -> (ServerInfo -> ServerInfo) -> M ()
           mkTestServer user serverRepoName serverCfgName serverConfig = do
             build <-
               testBuild
-                $ (repoUser .~ GhRepoOwner (user ^. githubLogin))
+                $ (repoUser .~ RepoOwner (user ^. githubLogin))
                 . (repoName .~ serverRepoName)
                 . (package .~ serverCfgName)
             void $ addTestServer $ (configurationBuildId .~ build ^. id) . serverConfig
@@ -715,7 +712,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           $ do
             (user, customerId) <- setupUserWithSubscription $ Entitlements.emptyUsageLimits & #ciTime .~ fromMinutes @Int 200
             useUpCiTime user $ fromMinutes @Int 100123
-            compAllUserBuilds $ GhRepoOwner $ user ^. githubLogin
+            compAllUserBuilds $ RepoOwner $ user ^. githubLogin
             handleInvoiceCreated $ dummyInvoiceCreatedEvent & (#customerId .~ customerId) & (#reason .~ StripeLib.SubscriptionCycle)
             getMockCalls #createInvoiceItemMock `shouldReturnM` []
 
@@ -906,8 +903,8 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
         $ const
         $ withServer
         $ \server -> do
-          user <- GhRepoOwner . (^. githubLogin) <$> server.login
-          res <- server.put ("/api/account/usage/" <> cs (getGhLogin $ getGhRepoOwner user)) newLimits
+          user <- RepoOwner . (^. githubLogin) <$> server.login
+          res <- server.put ("/api/account/usage/" <> cs (getForgeLogin $ getRepoOwner user)) newLimits
           res `shouldHaveStatusCode` 400
 
       it "returns 401 when making a request to an org that the user is not an admin of"
@@ -917,7 +914,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           withServer $ \server ->
             withTestEntitlement "test" identity "some-org" $ do
               void server.login
-              GH.addOrgMembers st [GhUserOrgMembership "some-org" (Other "user")]
+              GH.addOrgMembers st [UserOrgMembership "some-org" (Other "user")]
               res <- server.put "/api/account/usage/some-org" newLimits
               res `shouldHaveStatusCode` 401
               (Entitlements.getPlan "some-org" <&> (^. extraUsage . #ciTime)) `shouldReturnM` fromMinutes @Int 0
@@ -929,7 +926,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           withServer $ \server ->
             withTestEntitlement "test" identity "some-org" $ do
               void server.login
-              GH.addOrgMembers st [GhUserOrgMembership "some-org" Admin]
+              GH.addOrgMembers st [UserOrgMembership "some-org" Admin]
               let assert400 :: Int -> Int -> Int -> String -> M ()
                   assert400 ciTime prDeployTime hostingSpend expectedErr = do
                     let json =
@@ -952,7 +949,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
           withServer $ \server ->
             withTestEntitlement "test" identity "some-org" $ do
               void server.login
-              GH.addOrgMembers st [GhUserOrgMembership "some-org" Admin]
+              GH.addOrgMembers st [UserOrgMembership "some-org" Admin]
               void $ assert200 $ server.put "/api/account/usage/some-org" newLimits
               plan <- Entitlements.getPlan "some-org"
               plan ^. extraUsage . #ciTime `shouldBeM` fromMinutes @Int 1234
@@ -965,9 +962,9 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
         $ const
         $ withServer
         $ \server -> do
-          user <- GhRepoOwner . (^. githubLogin) <$> server.login
+          user <- RepoOwner . (^. githubLogin) <$> server.login
           withTestEntitlement "test" identity user $ do
-            void $ assert200 $ server.put ("/api/account/usage/" <> cs (getGhLogin $ getGhRepoOwner user)) newLimits
+            void $ assert200 $ server.put ("/api/account/usage/" <> cs (getForgeLogin $ getRepoOwner user)) newLimits
             plan <- Entitlements.getPlan user
             plan ^. extraUsage . #ciTime `shouldBeM` fromMinutes @Int 1234
             plan ^. extraUsage . #prDeployTime `shouldBeM` fromMinutes @Int 567
@@ -1082,19 +1079,18 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
 
     describe "getEnabledRepos" $ do
       let mockGithubInterface =
-            locally
-              #githubInterface
+            withForgeMock
               ( \x ->
                   x
-                    { _githubInterfaceGetInstallations =
+                    { _forgeGetInstallations =
                         const
                           $ pure
-                            [ GH.mkId Proxy 1,
-                              GH.mkId Proxy 2
+                            [ ForgeInstallationId 1,
+                              ForgeInstallationId 2
                             ],
-                      _githubInterfaceGetReposInInstallationAccessibleTo = \org _ ->
+                      _forgeGetReposAccessibleTo = \org _ ->
                         pure
-                          $ case GH.untagId org of
+                          $ case getForgeInstallationId org of
                             1 -> ["org1/repo1"]
                             2 -> ["org2/repo2"]
                             _ -> []
@@ -1103,7 +1099,7 @@ spec = inM $ beforeM_ truncateDBM $ aroundM_ suppressLogsWhenPassing $ do
       it "lists garnix-enabled repos the user has access to" $ suppressLogs $ do
         mockGithubInterface $ do
           testUser <- mkTestUser
-          enabledReposOf (Authenticated $ WebSession testUser (GhToken "user-with-no-builds"))
+          enabledReposOf (Authenticated $ WebSession testUser (ForgeToken "user-with-no-builds"))
             `shouldReturnM` EnabledRepos ["org1/repo1", "org2/repo2"]
 
 mkTestUser :: M User
@@ -1112,7 +1108,7 @@ mkTestUser = do
   pure
     $ User
       { _userId = UserId 1,
-        _userGithubLogin = GhLogin "mock-user",
+        _userGithubLogin = ForgeLogin "mock-user",
         _userEmail = Email "mock-user@example.com",
         _userSubscriptionType = FreeSubscription,
         _userCreatedAt = now
@@ -1123,7 +1119,7 @@ mkDbTestUser = do
   user <- mkTestUser
   DB.newUser (user ^. githubLogin) (user ^. email) (user ^. subscriptionType) False
 
-addServer :: Build -> Maybe GhPullRequestId -> UTCTime -> Maybe Duration -> M ()
+addServer :: Build -> Maybe PullRequestId -> UTCTime -> Maybe Duration -> M ()
 addServer build pr now duration = do
   let (start, end) = case duration of
         Nothing -> (now, Nothing)

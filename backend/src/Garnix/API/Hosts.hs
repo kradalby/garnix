@@ -105,8 +105,8 @@ getHostsForTraefik = do
     DB.getAllRunningHosts
       <&> filter
         ( \host ->
-            isValidSubdomainString (host ^. repoOwner . to getGhRepoOwner . to getGhLogin)
-              && isValidSubdomainString (host ^. repoName . to getGhRepoName)
+            isValidSubdomainString (host ^. repoOwner . to getRepoOwner . to getForgeLogin)
+              && isValidSubdomainString (host ^. repoName . to getRepoName)
               && (isValidSubdomainString (host ^. branch . to getBranch) || isJust (host ^. pullRequest))
               && isValidSubdomainString (host ^. packageName . to getPackageName)
         )
@@ -151,7 +151,7 @@ getHostsForDns = do
 getHosts :: AuthResult AuthJwtPayload -> M [RunningServer]
 getHosts (Authenticated (WebSession user ghToken)) = do
   getRunningAndRecentServersForOwners
-    . (GhRepoOwner (user ^. githubLogin) :)
+    . (RepoOwner (user ^. githubLogin) :)
     . map organizationName
     =<< getInstalledOrgs ghToken
 getHosts _ = throw Unauthorized
@@ -159,7 +159,7 @@ getHosts _ = throw Unauthorized
 deleteHost :: AuthResult AuthJwtPayload -> ServerId -> M ()
 deleteHost (Authenticated (WebSession user ghToken)) serverId = do
   orgs <-
-    (GhRepoOwner (user ^. githubLogin) :)
+    (RepoOwner (user ^. githubLogin) :)
       . map organizationName
       <$> getInstalledOrgs ghToken
   hetznerServerIds <- do
@@ -193,6 +193,6 @@ getDomainsForOnDemandResolver = do
 
 hostToPrimaryDomainName :: Host -> Text
 hostToPrimaryDomainName host =
-  getGhRepoName (_hostRepoName host)
+  getRepoName (_hostRepoName host)
     <> "."
-    <> getGhLogin (getGhRepoOwner (_hostRepoOwner host))
+    <> getForgeLogin (getRepoOwner (_hostRepoOwner host))

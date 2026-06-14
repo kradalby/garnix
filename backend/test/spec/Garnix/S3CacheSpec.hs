@@ -400,20 +400,20 @@ spec = do
         GH.withFakeGithubInterface $ \github -> do
           withServer $ \server -> do
             user <- testUser
-            GH.mkRepo github (GhRepoOwner $ user ^. githubLogin) "repo"
+            GH.mkRepo github (RepoOwner $ user ^. githubLogin) "repo"
               $ (#publicity .~ RepoIsPublic False)
             (evalResult, storePath) <- localTestBuild simpleFlake
-            upload mempty (GhRepoOwner $ user ^. githubLogin) "repo" evalResult (RepoIsPublic False)
+            upload mempty (RepoOwner $ user ^. githubLogin) "repo" evalResult (RepoIsPublic False)
             runSubProcess_ $ cmd "nix-store" & addArgs ["--delete", cs storePath, cs (evalResult ^. #derivation) :: Text]
             narInfoResponse <- server.get ("/api/cache/" <> cs (getHash storePath) <> ".narinfo")
             narInfoResponse ^. responseStatus `shouldBeM` notFound404
 
       describe "accessing private uploaded nar files with access tokens" $ do
         let createDerivationInCache user github = do
-              GH.mkRepo github (GhRepoOwner $ user ^. githubLogin) "repo"
+              GH.mkRepo github (RepoOwner $ user ^. githubLogin) "repo"
                 $ (#publicity .~ RepoIsPublic False)
               (evalResult, storePath) <- localTestBuild simpleFlake
-              upload mempty (GhRepoOwner $ user ^. githubLogin) "repo" evalResult (RepoIsPublic False)
+              upload mempty (RepoOwner $ user ^. githubLogin) "repo" evalResult (RepoIsPublic False)
               runSubProcess_ $ cmd "nix-store" & addArgs ["--delete", cs storePath, cs (evalResult ^. #derivation) :: Text]
               pure storePath
 
@@ -430,7 +430,7 @@ spec = do
                   $ unindent
                   $ [i|
                       machine localhost
-                      login #{getGhLogin (user ^. githubLogin)}
+                      login #{getForgeLogin (user ^. githubLogin)}
                       password #{getAccessTokenText accessToken}
                     |]
                 testCachePubKey <- liftIO $ getEnv "TEST_CACHE_PUB_KEY"
@@ -474,10 +474,10 @@ spec = do
           GH.withFakeGithubInterface $ \github -> do
             withServer $ \server -> do
               user <- testUser
-              GH.mkRepo github (GhRepoOwner $ user ^. githubLogin) "repo"
+              GH.mkRepo github (RepoOwner $ user ^. githubLogin) "repo"
                 $ (#publicity .~ RepoIsPublic False)
               (evalResult, storePath) <- localTestBuild simpleFlake
-              upload mempty (GhRepoOwner $ user ^. githubLogin) "repo" evalResult (RepoIsPublic False)
+              upload mempty (RepoOwner $ user ^. githubLogin) "repo" evalResult (RepoIsPublic False)
               runSubProcess_ $ cmd "nix-store" & addArgs ["--delete", cs storePath, cs (evalResult ^. #derivation) :: Text]
               let plainTextToken = "hunter2"
               hashPassword plainTextToken >>= DB.insertAccessTokenForUser (user ^. id) "test token" (AccessTokenScopes {api = False, cache = True})

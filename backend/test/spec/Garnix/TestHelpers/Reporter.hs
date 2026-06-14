@@ -44,8 +44,7 @@ withTestReporter action = do
                           RunReportStatusFailure -> False
                           RunReportStatusTimeout -> False
                           RunReportStatusCancelled -> False
-                    addToReport (Just success) Nothing,
-                  ghRunId = Nothing
+                    addToReport (Just success) Nothing
                 }
         }
   logs <- liftIO $ readMVar logsMVar

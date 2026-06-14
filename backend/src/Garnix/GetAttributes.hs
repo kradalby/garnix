@@ -15,7 +15,7 @@ import Garnix.YamlConfig
 
 subAttrs ::
   (HasCallStack) =>
-  GhRepoOwner ->
+  RepoOwner ->
   FlakeDir ->
   Attribute ->
   M [Attribute]
@@ -44,7 +44,7 @@ subAttrs repoOwner flakeDir attr = do
   parsed <- aesonDecode ("output of 'nix" <> T.unwords args <> "'") parseJSON res
   pure $ catMaybes [addSubAttr attr r | r <- parsed]
 
-ifIsAttr :: (HasCallStack) => GhRepoOwner -> FlakeDir -> Attribute -> M [Attribute]
+ifIsAttr :: (HasCallStack) => RepoOwner -> FlakeDir -> Attribute -> M [Attribute]
 ifIsAttr repoOwner flakeDir attr = do
   cacheDir <- getNixXdgCacheDir
   nixConfig <- view #userNixConfig

@@ -27,7 +27,7 @@ import Garnix.Password
 import Garnix.Prelude
 import Garnix.Types
 
-getUser :: GhLogin -> M User
+getUser :: ForgeLogin -> M User
 getUser ghLogin = do
   res <-
     pgQuery
@@ -45,7 +45,7 @@ getUser ghLogin = do
     [(id', email', sub', cre')] -> pure $ User id' ghLogin email' sub' cre'
     _ -> throw $ OtherError "Got more than 1 user from getUser"
 
-getUserId :: GhLogin -> M UserId
+getUserId :: ForgeLogin -> M UserId
 getUserId ghLogin = do
   res <- pgQuery [pgSQL| SELECT id FROM users WHERE github_login = ${ghLogin} |]
   case res of
@@ -53,7 +53,7 @@ getUserId ghLogin = do
     [id] -> pure $ UserId id
     _ -> throw $ OtherError "Got more than 1 user from getUserId"
 
-newUser :: GhLogin -> Email -> SubscriptionType -> Bool -> M User
+newUser :: ForgeLogin -> Email -> SubscriptionType -> Bool -> M User
 newUser ghLogin email' sub agreeToEmails' = do
   r <-
     pgQuery
@@ -86,7 +86,7 @@ newUser ghLogin email' sub agreeToEmails' = do
     [] -> throw $ UserAlreadyExists ghLogin
     _ -> throw $ OtherError "impossible: more than two users created"
 
-getRepoConfig :: GhRepoOwner -> GhRepoName -> M RepoConfig
+getRepoConfig :: RepoOwner -> RepoName -> M RepoConfig
 getRepoConfig repoOwner repoName = do
   repoConfig <-
     map (\(skipInputChecks, evalMemory) -> RepoConfig skipInputChecks (fromMaybe (defaultRepoConfig ^. maxEvalMemory) evalMemory))
@@ -169,8 +169,8 @@ getOriginalBuildForDrvPath user drvPath = do
     [] -> pure Nothing
     _ -> throw $ OtherError "Impossible: more than one result"
 
-makeNewBuildForGithubRunId :: GhLogin -> GhRunId -> Text -> M Build
-makeNewBuildForGithubRunId reqUser ghRunId evalHost = do
+makeNewBuildFromBuildId :: ForgeLogin -> BuildId -> Text -> M Build
+makeNewBuildFromBuildId reqUser buildId evalHost = do
   now <- liftIO getCurrentTime
   res <-
     pgQueryPrism
@@ -219,7 +219,7 @@ makeNewBuildForGithubRunId reqUser ghRunId evalHost = do
         ${evalHost},
         FALSE
       FROM builds
-      WHERE github_run_id = ${ghRunId}
+      WHERE id = ${buildId}
     RETURNING
       id,
       repo_user,
@@ -246,7 +246,7 @@ makeNewBuildForGithubRunId reqUser ghRunId evalHost = do
   |]
   case res of
     [r] -> pure r
-    [] -> throw $ NoSuchBuildRunId ghRunId
+    [] -> throw $ NoSuchBuild buildId
     _ -> throw $ OtherError "Impossible: more than one result"
 
 getLatestBuildsMatching :: RepoInfo -> CommitHash -> M [Build]
@@ -330,7 +330,7 @@ setBuildUploaded buildId = do
         WHERE id = ${buildId}
       |]
 
-getLatestBuildsForBranch :: GhRepoOwner -> GhRepoName -> Branch -> M [Build]
+getLatestBuildsForBranch :: RepoOwner -> RepoName -> Branch -> M [Build]
 getLatestBuildsForBranch owner name branch = do
   pgQueryPrism
     _Build
@@ -378,7 +378,7 @@ getLatestBuildsForBranch owner name branch = do
 data RegisterPushResult = NewPush | AlreadyPushed
   deriving stock (Eq, Show, Generic)
 
-registerPush :: GhRepoOwner -> GhRepoName -> CommitHash -> Branch -> M RegisterPushResult
+registerPush :: RepoOwner -> RepoName -> CommitHash -> Branch -> M RegisterPushResult
 registerPush repoOwner repoName commit branch = do
   pgQuery
     [pgSQL|
@@ -402,14 +402,14 @@ registerPush repoOwner repoName commit branch = do
       [_ :: Maybe Bool] -> pure NewPush
       _ -> throw $ OtherError "Impossible: more than one result"
 
-getCommitsByOwnerAndRepo :: GhRepoOwner -> GhRepoName -> M [CommitSummary]
+getCommitsByOwnerAndRepo :: RepoOwner -> RepoName -> M [CommitSummary]
 getCommitsByOwnerAndRepo repoOwner repoName = do
   map
-    ( \( repoOwner :: GhRepoOwner,
-         repoName :: GhRepoName,
+    ( \( repoOwner :: RepoOwner,
+         repoName :: RepoName,
          gitCommit :: CommitHash,
          branch :: Maybe Branch,
-         reqUser :: GhLogin,
+         reqUser :: ForgeLogin,
          isPublic :: Bool,
          startTime :: UTCTime,
          succeeded :: Int64,
@@ -444,7 +444,7 @@ getCommitsByOwnerAndRepo repoOwner repoName = do
         LIMIT 100
       |]
 
-getCommit :: GhRepoOwner -> GhRepoName -> CommitHash -> M (Maybe Commit)
+getCommit :: RepoOwner -> RepoName -> CommitHash -> M (Maybe Commit)
 getCommit owner name commit =
   pgQueryPrism
     _Commit
@@ -465,7 +465,7 @@ getCommit owner name commit =
       [] -> pure Nothing
       _ -> throw $ OtherError "Impossible: more than one result"
 
-newCommit :: GhRepoOwner -> GhRepoName -> CommitHash -> M ()
+newCommit :: RepoOwner -> RepoName -> CommitHash -> M ()
 newCommit owner name commit =
   void
     $ pgExec
@@ -478,7 +478,7 @@ newCommit owner name commit =
           SET meta_check = 'pending'
       |]
 
-setCommitStatus :: GhRepoOwner -> GhRepoName -> CommitHash -> CommitStatus -> M ()
+setCommitStatus :: RepoOwner -> RepoName -> CommitHash -> CommitStatus -> M ()
 setCommitStatus owner name commit st =
   void
     $ pgExec
@@ -512,7 +512,7 @@ data CheckStatusUpdate = CheckStatusUpdate
 --
 -- As it is, buildA's thread would still attempt to set the check to CheckFail, but only if its current
 -- state is CheckPending, which is not. So no change will happen, which is what we want.
-setMetaCheck :: GhRepoOwner -> GhRepoName -> CommitHash -> CheckStatusUpdate -> M Bool
+setMetaCheck :: RepoOwner -> RepoName -> CommitHash -> CheckStatusUpdate -> M Bool
 setMetaCheck owner name commit (CheckStatusUpdate {_checkStatusUpdateFrom = from, _checkStatusUpdateTo = to}) = do
   if from == to
     then pure False
@@ -528,7 +528,7 @@ setMetaCheck owner name commit (CheckStatusUpdate {_checkStatusUpdateFrom = from
               AND meta_check = ${from}
           |]
 
-getBuildsAndRunsByCommit :: GhRepoOwner -> GhRepoName -> CommitHash -> M FullCommitState
+getBuildsAndRunsByCommit :: RepoOwner -> RepoName -> CommitHash -> M FullCommitState
 getBuildsAndRunsByCommit repoOwner repoName commitHash = do
   mCommit <- getCommit repoOwner repoName commitHash
   case mCommit of
@@ -540,7 +540,7 @@ getBuildsAndRunsByCommit repoOwner repoName commitHash = do
         runs <- getRuns repoOwner repoName commitHash
         pure $ CommitEvaluated commit builds runs
 
-getBuildsByCommit :: GhRepoOwner -> GhRepoName -> CommitHash -> M [Build]
+getBuildsByCommit :: RepoOwner -> RepoName -> CommitHash -> M [Build]
 getBuildsByCommit repoOwner repoName commitHash = do
   pgQuery
     [pgSQL|
@@ -624,7 +624,7 @@ getBuildsByCommit repoOwner repoName commitHash = do
               }
       )
 
-getRuns :: GhRepoOwner -> GhRepoName -> CommitHash -> M [Run]
+getRuns :: RepoOwner -> RepoName -> CommitHash -> M [Run]
 getRuns repoOwner repoName commitHash = do
   pgQuery
     [pgSQL|
@@ -727,7 +727,7 @@ newRun name commitInfo = do
     _ -> throw $ OtherError "newRun: Unexpected number of updates"
 
 -- todo remove?
-tagCacheUpload :: GhRepoOwner -> GhRepoName -> [StorePath] -> M ()
+tagCacheUpload :: RepoOwner -> RepoName -> [StorePath] -> M ()
 tagCacheUpload repoOwner repoName =
   \case
     [] -> pure ()
@@ -749,7 +749,7 @@ tagCacheUpload repoOwner repoName =
               ON CONFLICT DO NOTHING
           |]
 
-getReposForHash :: StoreHash -> M [(GhRepoOwner, GhRepoName)]
+getReposForHash :: StoreHash -> M [(RepoOwner, RepoName)]
 getReposForHash hash = do
   pgQuery
     [pgSQL|
@@ -802,7 +802,7 @@ finalizeS3CacheUpload s3CacheStoreHash = do
         WHERE hash = ${hash};
       |]
 
-tagCacheUploadForS3Cache :: GhRepoOwner -> GhRepoName -> StoreHash -> M ()
+tagCacheUploadForS3Cache :: RepoOwner -> RepoName -> StoreHash -> M ()
 tagCacheUploadForS3Cache repoOwner repoName hash = do
   void
     $ pgExec
@@ -978,11 +978,11 @@ deleteAccessTokenForUser userId tokenId = do
 getCommitsForReqUser :: User -> M [CommitSummary]
 getCommitsForReqUser user = do
   map
-    ( \( repoOwner :: GhRepoOwner,
-         repoName :: GhRepoName,
+    ( \( repoOwner :: RepoOwner,
+         repoName :: RepoName,
          gitCommit :: CommitHash,
          branch :: Maybe Branch,
-         reqUser :: GhLogin,
+         reqUser :: ForgeLogin,
          isPublic :: Bool,
          startTime :: UTCTime,
          succeeded :: Int64,
@@ -1057,11 +1057,11 @@ getCommitSummary :: CommitHash -> M CommitSummary
 getCommitSummary commit = do
   res <-
     map
-      ( \( repoOwner :: GhRepoOwner,
-           repoName :: GhRepoName,
+      ( \( repoOwner :: RepoOwner,
+           repoName :: RepoName,
            gitCommit :: CommitHash,
            branch :: Maybe Branch,
-           reqUser :: GhLogin,
+           reqUser :: ForgeLogin,
            isPublic :: Bool,
            startTime :: UTCTime,
            succeeded :: Int64,
@@ -1272,7 +1272,7 @@ getPreprovisionedServerCount tier = do
     _ -> throw $ OtherError "getPreprovisionedServerCount: Unexpected return type"
 
 -- Claim a preprovisioned server, if there is one.
-claimServerDB :: ServerToSpinUp -> Maybe GhPullRequestId -> M (Maybe ServerInfo)
+claimServerDB :: ServerToSpinUp -> Maybe PullRequestId -> M (Maybe ServerInfo)
 claimServerDB serverToSpinUp pullRequest =
   pgTransaction $ do
     let serverTier = serverToSpinUp ^. #serverTier
@@ -1505,7 +1505,7 @@ getRunningServersOf repoInfo deploymentType = do
         AND servers.pull_request = ${prId}
       |]
 
-getHetznerServerById :: [GhRepoOwner] -> ServerId -> M (Maybe HetznerServerId)
+getHetznerServerById :: [RepoOwner] -> ServerId -> M (Maybe HetznerServerId)
 getHetznerServerById owner serverId = do
   res <-
     pgQuery
@@ -1523,7 +1523,7 @@ getHetznerServerById owner serverId = do
     [] -> pure Nothing
     _ -> throw $ OtherError "Impossible: more than one result"
 
-getPrDeployDurationForOwner :: GhRepoOwner -> M Duration
+getPrDeployDurationForOwner :: RepoOwner -> M Duration
 getPrDeployDurationForOwner owner = do
   res <-
     pgQuery
@@ -1548,7 +1548,7 @@ getPrDeployDurationForOwner owner = do
     [Nothing] -> pure emptyDuration
     _ -> throw $ OtherError "Impossible: more than one result"
 
-getRunningBranchServersForOwner :: GhRepoOwner -> M (Map ServerTier Int64)
+getRunningBranchServersForOwner :: RepoOwner -> M (Map ServerTier Int64)
 getRunningBranchServersForOwner owner = do
   res <-
     pgQuery
@@ -1570,16 +1570,16 @@ getRunningBranchServersForOwner owner = do
     (_, Nothing) -> throw $ OtherError "Impossible: non-numeric COUNT"
   pure $ Map.fromList pairs
 
-getCurrentMonthUsage :: GhRepoOwner -> M Duration
+getCurrentMonthUsage :: RepoOwner -> M Duration
 getCurrentMonthUsage owner = do
   fromMaybe emptyDuration . Map.lookup owner <$> getCurrentMonthUsages [owner]
 
 getCurrentMonthUsages ::
-  [GhRepoOwner] ->
-  M (Map GhRepoOwner Duration)
+  [RepoOwner] ->
+  M (Map RepoOwner Duration)
 getCurrentMonthUsages owners = do
   fromList
-    . map (\(repoOwner :: GhRepoOwner, seconds :: Maybe Double) -> (repoOwner, fromSeconds $ fromMaybe 0 seconds))
+    . map (\(repoOwner :: RepoOwner, seconds :: Maybe Double) -> (repoOwner, fromSeconds $ fromMaybe 0 seconds))
     <$> pgQuery
       [pgSQL|
         SELECT
@@ -1613,7 +1613,7 @@ updatePeriodForCustomer (CustomerId customerId) startDate endDate =
           stripe_customer = ${customerId}
     |]
 
-getRepoKeyDB :: GhRepoOwner -> GhRepoName -> M (Maybe (PublicKey, PrivateKey))
+getRepoKeyDB :: RepoOwner -> RepoName -> M (Maybe (PublicKey, PrivateKey))
 getRepoKeyDB owner name = do
   results <-
     pgQuery
@@ -1631,8 +1631,8 @@ getRepoKeyDB owner name = do
 -- | In case of conflict, we return the key already in the DB, to prevent
 -- overwriting
 setRepoKeyDB ::
-  GhRepoOwner ->
-  GhRepoName ->
+  RepoOwner ->
+  RepoName ->
   Candidate PublicKey ->
   Candidate PrivateKey ->
   M (PublicKey, PrivateKey)
@@ -1658,7 +1658,7 @@ setRepoKeyDB owner name (Candidate pub) (Candidate priv) = do
     Nothing -> throw $ OtherError "Impossible setRepoKeyDB: expected a set key"
     Just v -> pure v
 
-getActionKeyDB :: GhRepoOwner -> GhRepoName -> PackageName -> M (Maybe (PublicKey, PrivateKey))
+getActionKeyDB :: RepoOwner -> RepoName -> PackageName -> M (Maybe (PublicKey, PrivateKey))
 getActionKeyDB owner name action = do
   results <-
     pgQuery
@@ -1677,8 +1677,8 @@ getActionKeyDB owner name action = do
 -- | In case of conflict, we return the key already in the DB, to prevent
 -- overwriting
 setActionKeyDB ::
-  GhRepoOwner ->
-  GhRepoName ->
+  RepoOwner ->
+  RepoName ->
   PackageName ->
   Candidate PublicKey ->
   Candidate PrivateKey ->
@@ -1707,7 +1707,7 @@ setActionKeyDB owner name action (Candidate pub) (Candidate priv) = do
     Nothing -> throw $ OtherError "Impossible setRepoKeyDB: expected a set key"
     Just v -> pure v
 
-isDenylisted :: GhRepoOwner -> GhRepoName -> M Bool
+isDenylisted :: RepoOwner -> RepoName -> M Bool
 isDenylisted owner name = do
   result :: [Text] <-
     pgQuery
@@ -1733,9 +1733,9 @@ addToWaitlist email = do
 
 -- * Installations
 
-getRepoOwnerForStripeCustomer :: CustomerId -> M (Maybe GhRepoOwner)
+getRepoOwnerForStripeCustomer :: CustomerId -> M (Maybe RepoOwner)
 getRepoOwnerForStripeCustomer customer = do
-  res :: [Maybe GhRepoOwner] <-
+  res :: [Maybe RepoOwner] <-
     pgQuery
       [pgSQL|
         SELECT repo_owner
@@ -1748,7 +1748,7 @@ getRepoOwnerForStripeCustomer customer = do
     [] -> pure Nothing
     _ : _ : _ -> throw $ OtherError "impossible: stripe_customer is unique"
 
-getInstallationStripeCustomer :: GhRepoOwner -> M (Maybe CustomerId)
+getInstallationStripeCustomer :: RepoOwner -> M (Maybe CustomerId)
 getInstallationStripeCustomer repoOwner = do
   res :: [Maybe Text] <-
     pgQuery
@@ -1763,7 +1763,7 @@ getInstallationStripeCustomer repoOwner = do
     [] -> pure Nothing
     _ : _ : _ -> throw $ OtherError "impossible: repo_owner is unique"
 
-setStripeCustomerId :: GhRepoOwner -> CustomerId -> M ()
+setStripeCustomerId :: RepoOwner -> CustomerId -> M ()
 setStripeCustomerId repoOwner stripeCustomerId = do
   void
     $ pgExec
@@ -1773,7 +1773,7 @@ setStripeCustomerId repoOwner stripeCustomerId = do
         (${repoOwner}, ${getCustomerId stripeCustomerId})
       |]
 
-setRequestedCancellation :: GhRepoOwner -> Bool -> M ()
+setRequestedCancellation :: RepoOwner -> Bool -> M ()
 setRequestedCancellation repoOwner requestedCancelation = do
   void
     $ pgExec
@@ -1783,7 +1783,7 @@ setRequestedCancellation repoOwner requestedCancelation = do
         WHERE repo_owner = ${repoOwner}
       |]
 
-getInstallationStatus :: GhRepoOwner -> M InstallationStatus
+getInstallationStatus :: RepoOwner -> M InstallationStatus
 getInstallationStatus repoOwner = do
   res :: [(Maybe UTCTime, Bool)] <-
     pgQuery
@@ -1869,7 +1869,7 @@ checkHealth = do
 
 -- * Tokens
 
-getUserInternalToken :: GhLogin -> M InternalCacheToken
+getUserInternalToken :: ForgeLogin -> M InternalCacheToken
 getUserInternalToken reqUser =
   maybeGetDbToken >>= \case
     Just token -> pure token

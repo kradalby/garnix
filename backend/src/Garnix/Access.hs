@@ -43,12 +43,12 @@ getBuildWithAccess access user' buildId = do
   when (not hasAccess) $ throw (NoSuchBuild buildId)
   pure build
 
-hasAccessTo :: Maybe User -> RepoPublicity -> GhLogin -> GhRepoOwner -> GhRepoName -> M Bool
+hasAccessTo :: Maybe User -> RepoPublicity -> ForgeLogin -> RepoOwner -> RepoName -> M Bool
 hasAccessTo user' repoIsPublic reqUser owner name
   | user' ^? _Just . githubLogin == Just reqUser = pure True
   | otherwise = hasAccessToRepo user' repoIsPublic owner name
 
-hasAccessToRepo :: Maybe User -> RepoPublicity -> GhRepoOwner -> GhRepoName -> M Bool
+hasAccessToRepo :: Maybe User -> RepoPublicity -> RepoOwner -> RepoName -> M Bool
 hasAccessToRepo user' repoIsPublic owner name
   | isRepoPublic repoIsPublic = pure True
   | user' ^? _Just . subscriptionType == Just Admin = pure True
@@ -58,9 +58,9 @@ hasAccessToRepo user' repoIsPublic owner name
         collaborators <- getCollaborators owner name
         case collaborators of
           RepoNotFound -> pure False
-          GhCollaborators collaborators' -> pure $ (user ^. githubLogin) `elem` collaborators'
+          Collaborators collaborators' -> pure $ (user ^. githubLogin) `elem` collaborators'
 
-getCollaborators :: GhRepoOwner -> GhRepoName -> M GhCollaborators
+getCollaborators :: RepoOwner -> RepoName -> M Collaborators
 getCollaborators owner repo = do
   installationId <- getGarnixInstallationId owner repo
   case installationId of
@@ -69,7 +69,7 @@ getCollaborators owner repo = do
       iAuth <- getInstallation (Id $ fromInteger id)
       getRepoCollaborators iAuth owner repo
 
-canCancelBuild :: Maybe User -> RepoPublicity -> GhLogin -> GhRepoOwner -> GhRepoName -> M Bool
+canCancelBuild :: Maybe User -> RepoPublicity -> ForgeLogin -> RepoOwner -> RepoName -> M Bool
 canCancelBuild user' _ reqUser owner name
   | user' ^? _Just . subscriptionType == Just Admin = pure True
   | user' ^? _Just . githubLogin == Just reqUser = pure True
@@ -79,4 +79,4 @@ canCancelBuild user' _ reqUser owner name
         collaborators <- getCollaborators owner name
         case collaborators of
           RepoNotFound -> pure False
-          GhCollaborators collaborators' -> pure $ (user ^. githubLogin) `elem` collaborators'
+          Collaborators collaborators' -> pure $ (user ^. githubLogin) `elem` collaborators'

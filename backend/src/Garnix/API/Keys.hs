@@ -7,13 +7,13 @@ import Garnix.Monad.SubProcess.Deprecated qualified as Deprecated
 import Garnix.Prelude
 import Garnix.Types
 
-getRepoPublicKey :: GhRepoOwner -> GhRepoName -> M PublicKey
+getRepoPublicKey :: RepoOwner -> RepoName -> M PublicKey
 getRepoPublicKey owner name = fst <$> getRepoKeys owner name
 
-getActionPublicKey :: GhRepoOwner -> GhRepoName -> PackageName -> M PublicKey
+getActionPublicKey :: RepoOwner -> RepoName -> PackageName -> M PublicKey
 getActionPublicKey owner name action = fst <$> getActionKeys owner name action
 
-getRepoKeys :: GhRepoOwner -> GhRepoName -> M (PublicKey, PrivateKey)
+getRepoKeys :: RepoOwner -> RepoName -> M (PublicKey, PrivateKey)
 getRepoKeys owner name = do
   mkey <- DB.getRepoKeyDB owner name
   case mkey of
@@ -22,7 +22,7 @@ getRepoKeys owner name = do
       DB.setRepoKeyDB owner name candidatePubKey candidatePrivKey
     Just key -> pure key
 
-getActionKeys :: GhRepoOwner -> GhRepoName -> PackageName -> M (PublicKey, PrivateKey)
+getActionKeys :: RepoOwner -> RepoName -> PackageName -> M (PublicKey, PrivateKey)
 getActionKeys owner name action = do
   mkey <- DB.getActionKeyDB owner name action
   case mkey of

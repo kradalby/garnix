@@ -166,9 +166,9 @@ buildPkg = curry7
               ModulePreview -> do
                 log Critical
                   $ "Module evaluation error for https://github.com/"
-                  <> getGhLogin (getGhRepoOwner $ build ^. repoUser)
+                  <> getForgeLogin (getRepoOwner $ build ^. repoUser)
                   <> "/"
-                  <> getGhRepoName (build ^. repoName)
+                  <> getRepoName (build ^. repoName)
                   <> "/commit/"
                   <> getCommitHash (build ^. gitCommit)
                   <> " error: "

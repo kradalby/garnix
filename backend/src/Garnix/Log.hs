@@ -34,20 +34,20 @@ instance Loggable MaybeSystem where
 instance Loggable CommitHash where
   asLog (CommitHash n) = [("commit", n)]
 
-instance Loggable GhRepoOwner where
-  asLog (GhRepoOwner (GhLogin n)) = [("gh_owner", n)]
+instance Loggable RepoOwner where
+  asLog (RepoOwner (ForgeLogin n)) = [("gh_owner", n)]
 
-instance Loggable GhRepoName where
-  asLog (GhRepoName n) = [("gh_repo", n)]
+instance Loggable RepoName where
+  asLog (RepoName n) = [("gh_repo", n)]
 
-instance Loggable GhPullRequestId where
-  asLog (GhPullRequestId n) = [("gh_pr", show n)]
+instance Loggable PullRequestId where
+  asLog (PullRequestId n) = [("gh_pr", show n)]
 
 instance Loggable UserId where
   asLog (UserId n) = [("user", show n)]
 
-instance Loggable GhLogin where
-  asLog (GhLogin n) = [("req_user", n)]
+instance Loggable ForgeLogin where
+  asLog (ForgeLogin n) = [("req_user", n)]
 
 instance Loggable InstallationAuth where
   asLog _ = []
@@ -57,16 +57,14 @@ instance Loggable BuildId where
     where
       hash = getBuildId id
 
-instance Loggable CommitInfo where
-  asLog info = asLog (info ^. _CommitInfo)
-
-instance Loggable RepoInfo where
-  asLog info = asLog (info ^. _RepoInfo)
+-- NOTE: 'Loggable' instances for 'CommitInfo' and 'RepoInfo' live in "Garnix.Monad"
+-- (those types moved there to carry the forge bundle, and "Garnix.Monad" imports
+-- this module, so the instances cannot live here).
 
 instance Loggable PackageInfo where
   asLog info = asLog (info ^. _PackageInfo)
 
-instance Loggable GhToken where
+instance Loggable ForgeToken where
   asLog _ = []
 
 instance Loggable ServerTier where

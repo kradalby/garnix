@@ -16,7 +16,12 @@ mkGithubReporter repoInfo commit =
     { createNewRun = \reportType -> do
         let name = reportName reportType
         url <- getRelativeUrl reportType
-        let initialReport = mkReport name url commit "" RunReportStatusInProgress
+        -- Set the check run's external_id to our own build id, so a provider-native
+        -- rerun maps back to a build without us storing the forge's run id.
+        let externalId = case reportType of
+              ReportBuild _ build -> Just $ build ^. id . to getBuildId . re hashIdText
+              _ -> Nothing
+        let initialReport = mkReport name url commit "" RunReportStatusInProgress externalId
         ghRunId <- newBuildReport repoInfo initialReport
         logsMVar <- newMVar (RunReportStatusInProgress, Nothing)
         lastSentLogsMVar <- newMVar Nothing
@@ -29,7 +34,7 @@ mkGithubReporter repoInfo commit =
               lastSent <- readMVar lastSentLogsMVar
               when (lastSent /= Just (status, logs)) $ do
                 modifyMVar_ lastSentLogsMVar $ const $ pure $ Just (status, logs)
-                let report = mkReport name url commit (fromMaybe "" logs) status
+                let report = mkReport name url commit (fromMaybe "" logs) status externalId
                 void $ ignoringAllErrors $ updateBuildReport ghRunId report repoInfo
         debouncedSendLogs <- do
           debounceDuration <- view #githubLogDebounceDuration
@@ -53,8 +58,7 @@ mkGithubReporter repoInfo commit =
                 debouncedSendLogs,
               reportComplete = \status -> do
                 appendLogs (Just status) Nothing
-                sendLogs,
-              ghRunId = Just ghRunId
+                sendLogs
             }
     }
 
@@ -76,8 +80,8 @@ getRelativeUrl buildOrRun = do
         Just uri -> pure $ Just uri
         Nothing -> throw $ OtherError $ "Failed to parse build URI from " <> path
 
-mkReport :: Text -> Maybe URI -> CommitHash -> Text -> RunReportStatus -> GhRunReport
-mkReport name url commit logs reportStatus =
+mkReport :: Text -> Maybe URI -> CommitHash -> Text -> RunReportStatus -> Maybe Text -> GhRunReport
+mkReport name url commit logs reportStatus externalId =
   GhRunReport
     { _ghRunReportName = name,
       _ghRunReportCommit = commit,
@@ -85,7 +89,8 @@ mkReport name url commit logs reportStatus =
       _ghRunReportStatus = reportStatus,
       _ghRunReportTitle = name,
       _ghRunReportSummary = getReportSummary $ checkRunSummary name reportStatus,
-      _ghRunReportLogs = RawLogs logs
+      _ghRunReportLogs = RawLogs logs,
+      _ghRunReportExternalId = externalId
     }
 
 checkRunSummary :: Text -> RunReportStatus -> ReportSummary

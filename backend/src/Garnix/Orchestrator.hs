@@ -5,6 +5,9 @@ module Garnix.Orchestrator
     handleCommit,
     handleRerun,
     RerunEvent (..),
+    ForgeEvent (..),
+    dispatchForgeEvent,
+    forgeReporter,
   )
 where
 
@@ -17,6 +20,7 @@ import Garnix.Hosting.Deploy (rolloutNewServerVersion)
 import Garnix.Monad
 import Garnix.Monad.Async (emptyPromise, resolve, spawn)
 import Garnix.Prelude
+import Garnix.GithubInterface (githubRepoInfo)
 import Garnix.Reporters.GithubReporter (mkGithubReporter)
 import Garnix.Reporters.OpenSearchReporter (openSearchReporter)
 import Garnix.Types hiding (ghRunId)
@@ -24,15 +28,43 @@ import Garnix.Types qualified as Types
 import GitHub.App.Auth qualified as GH
 
 data RerunEvent = RerunEvent
-  { reqUser :: GhLogin,
-    ghRunId :: GhRunId,
+  { reqUser :: ForgeLogin,
+    -- | The build to rerun, recovered from the check run's @external_id@.
+    originalBuildId :: BuildId,
     installAuth :: GH.InstallationAuth,
-    token :: GhToken,
+    token :: ForgeToken,
     repoIsPublic :: RepoPublicity
   }
   deriving stock (Generic)
 
-handlePullRequest :: (HasCallStack) => Reporter -> CommitInfo -> GhPullRequestId -> M (Promise ())
+-- | A forge-neutral, normalized webhook event. Per-forge webhook parsers (GitHub,
+-- Gitea, GitLab) translate their wire formats into this; 'dispatchForgeEvent' is
+-- the single, shared entry point into the build pipeline.
+data ForgeEvent
+  = -- | A commit/branch build was requested (GitHub check-suite or push). The
+    -- 'Bool' is whether a duplicate run is allowed (i.e. it's a rerequest).
+    CommitBuild Bool CommitInfo
+  | -- | A pull/merge request build was requested.
+    PullRequestBuild CommitInfo PullRequestId
+  | -- | A provider-native rerun of a single build was requested.
+    Rerun RerunEvent
+
+-- | The reporter for a commit's forge: OpenSearch plus the forge's own build
+-- reporting (which dispatches through the repo's forge bundle).
+forgeReporter :: CommitInfo -> Reporter
+forgeReporter commitInfo =
+  openSearchReporter <> mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit)
+
+-- | Dispatch a normalized 'ForgeEvent' into the (forge-agnostic) build pipeline.
+dispatchForgeEvent :: (HasCallStack) => ForgeEvent -> M (Promise ())
+dispatchForgeEvent = \case
+  CommitBuild allowDuplicateRun commitInfo ->
+    handleCommit (forgeReporter commitInfo) allowDuplicateRun commitInfo
+  PullRequestBuild commitInfo prId ->
+    handlePullRequest (forgeReporter commitInfo) commitInfo prId
+  Rerun ev -> handleRerun ev >> emptyPromise
+
+handlePullRequest :: (HasCallStack) => Reporter -> CommitInfo -> PullRequestId -> M (Promise ())
 handlePullRequest reporter commitInfo prId = do
   assertIsAllowedToBuild (commitInfo ^. repoInfo . ghRepoOwner) (commitInfo ^. repoInfo . ghRepoName)
 
@@ -45,7 +77,7 @@ handlePullRequest reporter commitInfo prId = do
     when (isNothing $ commitInfo ^. prFromFork) $ do
       deployPrServers prId
   where
-    deployPrServers :: GhPullRequestId -> M ()
+    deployPrServers :: PullRequestId -> M ()
     deployPrServers prId = do
       Build.Checkout.withCheckout commitInfo $ withSpan prId $ do
         withInternalCacheToken (commitInfo ^. Types.reqUser) $ do
@@ -81,13 +113,13 @@ handleCommit reporter allowDuplicateRun commitInfo = do
 handleRerun :: (HasCallStack) => RerunEvent -> M ()
 handleRerun ev = do
   hostname <- view #hostname
-  build' <- DB.makeNewBuildForGithubRunId (ev ^. #reqUser) (ev ^. #ghRunId) hostname
+  build' <- DB.makeNewBuildFromBuildId (ev ^. #reqUser) (ev ^. #originalBuildId) hostname
   withSpan (build' ^. id) $ do
     let commitInfo =
           CommitInfo
             { _commitInfoReqUser = ev ^. #reqUser,
               _commitInfoRepoPublicity = ev ^. #repoIsPublic,
-              _commitInfoRepoInfo = RepoInfo (ev ^. #installAuth) (ev ^. #token) (build' ^. repoUser) (build' ^. repoName),
+              _commitInfoRepoInfo = githubRepoInfo (ev ^. #installAuth) (ev ^. #token) (build' ^. repoUser) (build' ^. repoName),
               _commitInfoBranch = build' ^. branch,
               _commitInfoPrFromFork = build' ^. prFromFork,
               _commitInfoCommit = build' ^. gitCommit
@@ -96,7 +128,7 @@ handleRerun ev = do
     assertIsAllowedToBuild (build' ^. repoUser) (build' ^. repoName)
     withSpan commitInfo $ rerunBuild reporter build' commitInfo
 
-assertIsAllowedToBuild :: GhRepoOwner -> GhRepoName -> M ()
+assertIsAllowedToBuild :: RepoOwner -> RepoName -> M ()
 assertIsAllowedToBuild owner repo = do
   isDenied <- DB.isDenylisted owner repo
   when isDenied $ do

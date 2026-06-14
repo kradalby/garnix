@@ -140,11 +140,11 @@ spec = do
           badge <- badgesAPI repositoryLogin repositoryName repositoryBranch
           badgeMessage badge `shouldBeM` "2 succeeded, 2 failed, and 2 in progress"
 
-repositoryLogin :: GhRepoOwner
-repositoryLogin = GhRepoOwner (GhLogin "owner")
+repositoryLogin :: RepoOwner
+repositoryLogin = RepoOwner (ForgeLogin "owner")
 
-repositoryName :: GhRepoName
-repositoryName = GhRepoName "repo"
+repositoryName :: RepoName
+repositoryName = RepoName "repo"
 
 repositoryBranch :: Maybe Branch
 repositoryBranch = Just (Branch "branch")

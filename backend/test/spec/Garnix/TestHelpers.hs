@@ -21,14 +21,16 @@ import Garnix.DB qualified as DB
 import Garnix.DB.FeatureFlags (withRecachedFeatureFlags)
 import Garnix.DB.FeatureFlags.Types (FeatureFlagConfigDbo)
 import Garnix.Duration
+import Garnix.Forge.Types
+import Garnix.GithubInterface.Types (UserOrgMembership)
 import Garnix.Monad
 import Garnix.Monad.Async (resolve)
+import Garnix.TestHelpers.GithubInterface.Internal (fakeRepoInfo, githubForgeRegistry)
 import Garnix.Prelude
 import Garnix.TestHelpers.Monad (shouldBeM, withTestEnvironment)
 import Garnix.TestInstances ()
 import Garnix.Types hiding (head)
 import Garnix.Types qualified as G
-import GitHub.App.Auth (InstallationAuth)
 import GitHub.Data.Webhooks.Events
 import GitHub.Data.Webhooks.Payload
 import Iso.Deriving (isom)
@@ -86,19 +88,13 @@ defaultCommitInfo =
     }
 
 defaultRepoInfo :: RepoInfo
-defaultRepoInfo =
-  RepoInfo
-    { _repoInfoInstallationAuth = error "defaultEventInfo does not set installation auth",
-      _repoInfoGhToken = GhToken "",
-      _repoInfoGhRepoOwner = "owner",
-      _repoInfoGhRepoName = "repo"
-    }
+defaultRepoInfo = fakeRepoInfo "owner" "repo"
 
-eventRepoName :: Lens' CheckSuiteEvent (GhRepoOwner, GhRepoName)
+eventRepoName :: Lens' CheckSuiteEvent (RepoOwner, RepoName)
 eventRepoName =
   lens
-    (\event -> (GhRepoOwner (GhLogin (event ^. sender . login)), GhRepoName (event ^. repository . G.name)))
-    ( \event (GhRepoOwner (GhLogin owner), GhRepoName name) ->
+    (\event -> (RepoOwner (ForgeLogin (event ^. sender . login)), RepoName (event ^. repository . G.name)))
+    ( \event (RepoOwner (ForgeLogin owner), RepoName name) ->
         event
           & (repository . fullName .~ owner <> "/" <> name)
           & sender
@@ -126,7 +122,7 @@ mkPullRequestEvent commit branch fromRepo toRepo installationId' =
   let hookRepository =
         defaultViaArbitrary
           & (fullName .~ fromRepo)
-          & (G.name .~ getGhRepoName (snd (parseRepo fromRepo)))
+          & (G.name .~ getRepoName (snd (parseRepo fromRepo)))
    in defaultViaArbitrary
         & (G.action .~ PullRequestOpenedAction)
         & (G.sender . G.login .~ "owner")
@@ -136,18 +132,18 @@ mkPullRequestEvent commit branch fromRepo toRepo installationId' =
         & (payload . G.head . sha .~ getCommitHash commit)
         & (payload . G.head . ref .~ getBranch branch)
 
-parseRepo :: Text -> (GhRepoOwner, GhRepoName)
+parseRepo :: Text -> (RepoOwner, RepoName)
 parseRepo repo =
   case T.splitOn "/" repo of
-    [o, r] -> (GhRepoOwner (GhLogin o), GhRepoName r)
+    [o, r] -> (RepoOwner (ForgeLogin o), RepoName r)
     x -> error $ "Expected full name to split in two. Got: " <> show x
 
 -- | Send a notification to our webhook handler of a commit (as though github
 -- had called it).
 notifyOfCommit :: CheckSuiteEvent -> M ()
 notifyOfCommit event = do
-  let GhRepoOwner (GhLogin ghRepoOwner) = event ^. eventRepoName . _1
-  _ <- try $ DB.newUser (GhLogin ghRepoOwner) "owner@owner.com" FreeSubscription True
+  let RepoOwner (ForgeLogin ghRepoOwner) = event ^. eventRepoName . _1
+  _ <- try $ DB.newUser (ForgeLogin ghRepoOwner) "owner@owner.com" FreeSubscription True
   mFlakePromise <- ghWebhookCheckSuite event
   resolve mFlakePromise
 
@@ -274,12 +270,12 @@ waitFor duration action = do
 testUser :: M User
 testUser =
   DB.newUser
-    (GhLogin "user")
+    (ForgeLogin "user")
     (Email "foo@example.com")
     FreeSubscription
     True
 
-compAllUserBuilds :: GhRepoOwner -> M ()
+compAllUserBuilds :: RepoOwner -> M ()
 compAllUserBuilds owner = do
   void $ DB.pgExec [pgSQL| UPDATE builds SET comped = true WHERE repo_user = ${owner} |]
 
@@ -386,7 +382,7 @@ testBuild f = do
       |]
     pure build
 
-addTestBuild :: GhRepoOwner -> UTCTime -> Duration -> M Build
+addTestBuild :: RepoOwner -> UTCTime -> Duration -> M Build
 addTestBuild owner ended duration = do
   let started = subTime duration ended
   testBuild ((repoUser .~ owner) . (startTime .~ started) . (endTime ?~ ended))
@@ -532,7 +528,7 @@ withTestEntitlement ::
   (MonadIO m, MonadBaseControl IO m) =>
   Text ->
   (ProductPlan -> ProductPlan) ->
-  GhRepoOwner ->
+  RepoOwner ->
   m a ->
   m a
 withTestEntitlement product modify repoOwner action =
@@ -579,18 +575,39 @@ shouldThrow action error' = runTestM $ do
     Left e -> err e `shouldBeM` error'
     Right _ -> liftIO $ expectationFailure "Expected Left, got Right"
 
-withGithubMock :: Lens' GithubInterface g -> g -> M a -> M a
-withGithubMock l result action =
-  local (#githubInterface . l .~ result) action
+-- | Apply an arbitrary modification to the (fake) GitHub forge in the registry —
+-- useful when overriding several methods at once.
+withForgeMock :: (Forge 'GitHub -> Forge 'GitHub) -> M a -> M a
+withForgeMock modify action = do
+  forges' <- view #forges
+  case forges' GitHub of
+    SomeForge f -> case _forgeForgeKind f of
+      SGitHub -> local (#forges .~ githubForgeRegistry (modify f)) action
+      _ -> error "withForgeMock: GitHub registry entry is not a GitHub forge"
 
-repoCollaboratorsLens :: Lens' GithubInterface (InstallationAuth -> GhRepoOwner -> GhRepoName -> M GhCollaborators)
-repoCollaboratorsLens = lens _githubInterfaceGetRepoCollaborators (\gi f -> gi {_githubInterfaceGetRepoCollaborators = f})
+-- | Override a single method of the (fake) GitHub forge in the registry.
+withGithubMock :: Lens' (Forge 'GitHub) g -> g -> M a -> M a
+withGithubMock l result action = do
+  forges' <- view #forges
+  case forges' GitHub of
+    SomeForge f -> case _forgeForgeKind f of
+      SGitHub -> local (#forges .~ githubForgeRegistry (f & l .~ result)) action
+      _ -> error "withGithubMock: GitHub registry entry is not a GitHub forge"
 
-getRemoteLens :: Lens' GithubInterface (CommitInfo -> M RemoteUrl)
-getRemoteLens = lens _githubInterfaceGetRemote (\gi f -> gi {_githubInterfaceGetRemote = f})
+repoCollaboratorsLens :: Lens' (Forge 'GitHub) (ForgeAuth 'GitHub -> RepoOwner -> RepoName -> M Collaborators)
+repoCollaboratorsLens = lens _forgeGetRepoCollaborators (\f x -> f {_forgeGetRepoCollaborators = x})
 
-newBuildReportLens :: Lens' GithubInterface (RepoInfo -> GhRunReport -> M GhRunId)
-newBuildReportLens = lens _githubInterfaceNewBuildReport (\gi f -> gi {_githubInterfaceNewBuildReport = f})
+getRemoteLens :: Lens' (Forge 'GitHub) (ForgeRepo 'GitHub -> CommitHash -> Maybe PrFromFork -> M RemoteUrl)
+getRemoteLens = lens _forgeGetRemote (\f x -> f {_forgeGetRemote = x})
+
+newBuildReportLens :: Lens' (Forge 'GitHub) (ForgeRepo 'GitHub -> GhRunReport -> M ForgeRunId)
+newBuildReportLens = lens _forgeNewBuildReport (\f x -> f {_forgeNewBuildReport = x})
+
+updateBuildReportLens :: Lens' (Forge 'GitHub) (ForgeRunId -> GhRunReport -> ForgeRepo 'GitHub -> M ())
+updateBuildReportLens = lens _forgeUpdateBuildReport (\f x -> f {_forgeUpdateBuildReport = x})
+
+installedOrgsLens :: Lens' (Forge 'GitHub) (ForgeToken -> M [UserOrgMembership])
+installedOrgsLens = lens _forgeGetInstalledOrgs (\f x -> f {_forgeGetInstalledOrgs = x})
 
 getNixpkgsCommitSha :: (MonadIO m) => m Text
 getNixpkgsCommitSha = do

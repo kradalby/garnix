@@ -26,13 +26,13 @@ import Servant.Auth.Server
 
 data AccountAPI route = AccountAPI
   { _accountAPIUsage :: route :- "usage" :> Get '[JSON] UsageOverview,
-    _accountAPIOrgUsage :: route :- "usage" :> Capture "org" GhRepoOwner :> Get '[JSON] OrgUsage,
-    _accountAPISetUsageLimits :: route :- "usage" :> Capture "org" GhRepoOwner :> ReqBody '[JSON] ExtraUsageLimits :> Put '[JSON] NoContent,
+    _accountAPIOrgUsage :: route :- "usage" :> Capture "org" RepoOwner :> Get '[JSON] OrgUsage,
+    _accountAPISetUsageLimits :: route :- "usage" :> Capture "org" RepoOwner :> ReqBody '[JSON] ExtraUsageLimits :> Put '[JSON] NoContent,
     _accountAPIUpgradeOption :: route :- "upgrade_option" :> QueryParam "product_token" ProductToken :> Get '[JSON] UpgradeOption,
     _accountAPITaxes :: route :- "taxes" :> ReqBody '[JSON] TaxesRequest :> Post '[JSON] TaxCalculationDto,
     _accountAPIEnabledRepos :: route :- "repos" :> Get '[JSON] EnabledRepos,
     _accountAPISubscribe :: route :- "subscribe" :> ReqBody '[JSON] SubscribeRequestBody :> Post '[JSON] SubscribeResponse,
-    _accountAPIUnsubscribe :: route :- "subscription" :> Capture "org" GhRepoOwner :> Delete '[JSON] NoContent,
+    _accountAPIUnsubscribe :: route :- "subscription" :> Capture "org" RepoOwner :> Delete '[JSON] NoContent,
     _accountAPIGetAccessTokens :: route :- "tokens" :> Get '[JSON] GetTokensResponseBody,
     _accountAPICreateAccessToken :: route :- "tokens" :> ReqBody '[JSON] CreateTokenRequestBody :> Post '[JSON] CreateTokenResponseBody,
     _accountAPIRevokeAccessToken :: route :- "tokens" :> Capture "tokenId" Int64 :> Delete '[JSON] NoContent
@@ -56,7 +56,7 @@ accountAPI user =
     }
 
 data UsageOverview = UsageOverview
-  { _usageOverviewByOrg :: Map.Map GhRepoOwner OrgUsage
+  { _usageOverviewByOrg :: Map.Map RepoOwner OrgUsage
   }
   deriving stock (Eq, Show, Generic)
 
@@ -78,14 +78,14 @@ instance ToJSON OrgUsage where
   toEncoding = ourToEncoding
   toJSON = ourToJSON
 
-getOrgsUserIsAdminIn :: User -> GhToken -> M [GhRepoOwner]
+getOrgsUserIsAdminIn :: User -> ForgeToken -> M [RepoOwner]
 getOrgsUserIsAdminIn user token =
-  (GhRepoOwner (user ^. githubLogin) :)
+  (RepoOwner (user ^. githubLogin) :)
     . map organizationName
     . filter (\membership -> role membership == Admin)
     <$> getInstalledOrgs token
 
-getUsageForOrg :: Map.Map GhRepoOwner Duration -> Map.Map GhRepoOwner ProductPlan -> GhRepoOwner -> M OrgUsage
+getUsageForOrg :: Map.Map RepoOwner Duration -> Map.Map RepoOwner ProductPlan -> RepoOwner -> M OrgUsage
 getUsageForOrg usage plans org = do
   prDeploymentTime <- DB.getPrDeployDurationForOwner org
   branchDeployments <- sum <$> DB.getRunningBranchServersForOwner org
@@ -107,7 +107,7 @@ getUsageForOrg usage plans org = do
 usageOverview :: AuthResult AuthJwtPayload -> M UsageOverview
 usageOverview (Authenticated (WebSession user ghToken)) = do
   orgs <- getOrgsUserIsAdminIn user ghToken
-  usage <- DB.getCurrentMonthUsages (GhRepoOwner (user ^. githubLogin) : orgs)
+  usage <- DB.getCurrentMonthUsages (RepoOwner (user ^. githubLogin) : orgs)
   plans <- getPlans orgs
   map <- mkMapM orgs $ getUsageForOrg usage plans
   pure $ UsageOverview map
@@ -123,7 +123,7 @@ mkMapM keys f =
           pure (key, value)
       )
 
-orgUsage :: AuthResult AuthJwtPayload -> GhRepoOwner -> M OrgUsage
+orgUsage :: AuthResult AuthJwtPayload -> RepoOwner -> M OrgUsage
 orgUsage (Authenticated (WebSession user ghToken)) org = do
   orgsUserIsAdminIn <- getOrgsUserIsAdminIn user ghToken
   when (org `notElem` orgsUserIsAdminIn) $ throw NotFound
@@ -132,7 +132,7 @@ orgUsage (Authenticated (WebSession user ghToken)) org = do
   getUsageForOrg usage plans org
 orgUsage _ _ = throw Unauthorized
 
-setUsageLimits :: AuthResult AuthJwtPayload -> GhRepoOwner -> ExtraUsageLimits -> M NoContent
+setUsageLimits :: AuthResult AuthJwtPayload -> RepoOwner -> ExtraUsageLimits -> M NoContent
 setUsageLimits (Authenticated (WebSession user ghToken)) org newLimits = do
   orgsUserIsAdminIn <- getOrgsUserIsAdminIn user ghToken
   when (org `notElem` orgsUserIsAdminIn) $ throw Unauthorized
@@ -222,7 +222,7 @@ getUpgradeOptionByToken token = case token of
       [] -> throw NotFound
       _ -> throw $ OtherError "impossible"
 
-upgradeOptions :: GhRepoOwner -> M (Maybe UpgradeOption)
+upgradeOptions :: RepoOwner -> M (Maybe UpgradeOption)
 upgradeOptions repoOwner = do
   res ::
     [ ( Text,
@@ -314,7 +314,7 @@ taxes user request = case user of
   Authenticated _ -> taxCalculation (request ^. #unit_amount) (request ^. #currency) (request ^. #address)
   _ -> throw Unauthorized
 
-type SubscribeRequestBody = Rec ("product_token" .== ProductToken .+ "github_org" .== GhRepoOwner)
+type SubscribeRequestBody = Rec ("product_token" .== ProductToken .+ "github_org" .== RepoOwner)
 
 type SubscribeResponse = Rec ("client_secret" .== ClientSecret)
 
@@ -329,7 +329,7 @@ createSubscription (Authenticated (WebSession user ghToken)) body = do
         customer <-
           StripeLib.createCustomer
             (body ^. #github_org)
-            (StripeLib.Name $ user ^. githubLogin . to getGhLogin)
+            (StripeLib.Name $ user ^. githubLogin . to getForgeLogin)
             (user ^. email)
         DB.setStripeCustomerId (body ^. #github_org) (customer ^. #id)
         pure $ customer ^. #id
@@ -350,7 +350,7 @@ createSubscription (Authenticated (WebSession user ghToken)) body = do
         )
 createSubscription _ _ = throw Unauthorized
 
-cancelOrgSubscription :: AuthResult AuthJwtPayload -> GhRepoOwner -> M NoContent
+cancelOrgSubscription :: AuthResult AuthJwtPayload -> RepoOwner -> M NoContent
 cancelOrgSubscription (Authenticated (WebSession user ghToken)) org = do
   orgsUserIsAdminIn <- getOrgsUserIsAdminIn user ghToken
   when (org `notElem` orgsUserIsAdminIn) $ throw NotFound
@@ -380,12 +380,12 @@ cancelOrgSubscription _ _ = throw Unauthorized
 handleSubscriptionAdded :: StripeLib.SubscriptionCreatedOrUpdatedEvent -> M ()
 handleSubscriptionAdded (StripeLib.SubscriptionCreatedOrUpdatedEvent _eventType customerId priceId status periodStart periodEnd) = do
   when (status == StripeLib.SubscriptionStatusActive) $ do
-    repoOwner <- getGhRepoOwner customerId
+    repoOwner <- getRepoOwner customerId
     Entitlements.addProductByPriceId repoOwner priceId
     DB.updatePeriodForCustomer customerId periodStart periodEnd
   where
-    getGhRepoOwner :: CustomerId -> M GhRepoOwner
-    getGhRepoOwner customerId = do
+    getRepoOwner :: CustomerId -> M RepoOwner
+    getRepoOwner customerId = do
       res <-
         DB.pgQuery
           [pgSQL|

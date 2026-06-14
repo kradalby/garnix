@@ -53,12 +53,14 @@ import Garnix (envMocks)
 import Garnix.Async qualified
 import Garnix.DB.FeatureFlags.Types (getFeatureFlagConfig)
 import Garnix.Duration
+import Garnix.Forge.Types (ForgeConfig (..), ForgeKind (..), GithubAppConfig (..))
 import Garnix.Monad
 import Garnix.Monad.Metrics (registerMetrics)
 import Garnix.Monad.Pool qualified
 import Garnix.NixConfig (defaultNixConfig)
 import Garnix.Prelude
 import Garnix.TestHelpers.GithubInterface.Deprecated qualified as Deprecated
+import Garnix.TestHelpers.GithubInterface.Internal qualified as Internal
 import Garnix.TestHelpers.HetznerMock (testHetznerInterface)
 import Garnix.Types hiding (pending)
 import GitHub.App.Auth (AppAuth (..))
@@ -258,20 +260,30 @@ withTestEnvironment tempDir action = do
       fodCheckPool <- Garnix.Monad.Pool.newPool 40 metrics #fodCheckQueueWaitTime #fodCheckQueueLen
       withDefaultLogger $ \defaultLogger -> do
         ghInterface <- Deprecated.testGithubInterface tempDir buildRef
+        let testGithubConfig =
+              ForgeConfig
+                { forgeConfigBaseUrl = "https://github.com",
+                  forgeConfigWebhookSecret = "github-webhook-secret",
+                  forgeConfigOAuthClientId = "github-client-id",
+                  forgeConfigOAuthClientSecret = "github-client-secret",
+                  forgeConfigApiToken = Nothing,
+                  forgeConfigApp =
+                    Just
+                      GithubAppConfig
+                        { githubAppConfigAuth = githubAppAuth,
+                          githubAppConfigName = "github-app-name",
+                          githubAppConfigId = Id 12345
+                        }
+                }
         let env =
               Env
                 { testFeatures = testFeatures,
-                  githubAppAuth = githubAppAuth,
-                  githubAppName = "github-app-name",
-                  githubAppId = Id 12345,
-                  githubClientSecret = "github-client-secret",
-                  githubClientId = "github-client-id",
+                  forgeConfigs = \case GitHub -> Just testGithubConfig; _ -> Nothing,
                   buildLogsReportingPort = Nothing,
                   workingDir = tempDir,
                   nixXdgCacheDir = Nothing,
                   userNixConfig = defaultNixConfig,
-                  githubWebhookSecret = "github-webhook-secret",
-                  githubInterface = ghInterface,
+                  forges = Internal.githubForgeRegistry ghInterface,
                   hetznerInterface = testHetznerInterface,
                   serverPoolConfig = [],
                   cookieSettings = defaultCookieSettings {cookieXsrfSetting = Nothing},
@@ -359,10 +371,25 @@ addDevSecrets baseEnv = do
   let appPkPem' = case readRsaPem appPkPem of
         Right a -> a
         Left _ -> error "error reading GitHub App private key"
+      githubAppId' = Id $ read appId
+      baseConfigs = baseEnv ^. #forgeConfigs
+      overrideGithub cfg =
+        cfg
+          { forgeConfigWebhookSecret = githubWebhookSecret,
+            forgeConfigApp =
+              ( \app ->
+                  app
+                    { githubAppConfigAuth = AppAuth githubAppId' appPkPem',
+                      githubAppConfigId = githubAppId'
+                    }
+              )
+                <$> forgeConfigApp cfg
+          }
   pure
     $ baseEnv
-      { githubAppAuth = AppAuth (Id $ read appId) appPkPem',
-        githubWebhookSecret = githubWebhookSecret
+      { forgeConfigs = \kind -> case kind of
+          GitHub -> overrideGithub <$> baseConfigs GitHub
+          k -> baseConfigs k
       }
     & #stripe . #secretKey .~ stripeSecretKey
 

@@ -35,8 +35,8 @@ data RunningServer = RunningServer
   { _runningServerId :: ServerId,
     _runningServerType :: DeploymentType,
     _runningServerStatus :: ServerStatus,
-    _runningServerRepoOwner :: GhRepoOwner,
-    _runningServerRepoName :: GhRepoName,
+    _runningServerRepoOwner :: RepoOwner,
+    _runningServerRepoName :: RepoName,
     _runningServerPackageName :: PackageName,
     _runningServerCreatedAt :: Maybe UTCTime,
     _runningServerConfigurationBuildId :: BuildId,
@@ -49,7 +49,7 @@ data RunningServer = RunningServer
 instance ToJSON RunningServer where
   toJSON = ourToJSON
 
-getRunningAndRecentServersForOwners :: [GhRepoOwner] -> M [RunningServer]
+getRunningAndRecentServersForOwners :: [RepoOwner] -> M [RunningServer]
 getRunningAndRecentServersForOwners owners = do
   mapMaybe
     ( \(id, pr, branch, readyAt, endedAt, repoUser, repoName, packageName, createdAt, buildId, commit, ipv4, logs) -> do
@@ -81,7 +81,7 @@ getRunningAndRecentServersForOwners owners = do
         ORDER BY servers.created_at DESC
       |]
   where
-    serverDeploymentType :: Maybe GhPullRequestId -> Maybe Branch -> Maybe DeploymentType
+    serverDeploymentType :: Maybe PullRequestId -> Maybe Branch -> Maybe DeploymentType
     serverDeploymentType pr branch = case (pr, branch) of
       (Just prId, _) -> Just $ GhPrDeployment prId
       (Nothing, Just branch) -> Just $ BranchDeployment branch
@@ -94,8 +94,8 @@ getRunningAndRecentServersForOwners owners = do
       (Nothing, Just _) -> Nothing
 
 data BranchServerGroupIdentifier = BranchServerGroupIdentifier
-  { owner :: GhRepoOwner,
-    repo :: GhRepoName,
+  { owner :: RepoOwner,
+    repo :: RepoName,
     package :: PackageName,
     serverTier :: ServerTier
   }
@@ -103,9 +103,9 @@ data BranchServerGroupIdentifier = BranchServerGroupIdentifier
 
 groupIdentifierToLineItemDescription :: BranchServerGroupIdentifier -> Text
 groupIdentifierToLineItemDescription group =
-  getGhLogin (getGhRepoOwner $ group ^. #owner)
+  getForgeLogin (getRepoOwner $ group ^. #owner)
     <> "/"
-    <> getGhRepoName (group ^. #repo)
+    <> getRepoName (group ^. #repo)
     <> "#"
     <> getPackageName (group ^. #package)
     <> " "
@@ -119,7 +119,7 @@ data BranchServerBillingLineItem = BranchServerBillingLineItem
   }
   deriving stock (Eq, Ord, Show, Generic)
 
-getBranchDeploymentBillingLineItems :: Int64 -> UTCTime -> UTCTime -> GhRepoOwner -> M [BranchServerBillingLineItem]
+getBranchDeploymentBillingLineItems :: Int64 -> UTCTime -> UTCTime -> RepoOwner -> M [BranchServerBillingLineItem]
 getBranchDeploymentBillingLineItems numFreeServers periodStart periodEnd owner = do
   now <- liftIO getCurrentTime
   servers <-
@@ -144,7 +144,7 @@ getBranchDeploymentBillingLineItems numFreeServers periodStart periodEnd owner =
         |]
   calculateBranchDeploymentBillingLineItems numFreeServers periodStart periodEnd
     <$> mapM
-      ( \(readyAt :: Maybe UTCTime, endTime :: Maybe UTCTime, serverTier :: ServerTier, repoOwner :: GhRepoOwner, repoName :: GhRepoName, package :: PackageName) -> do
+      ( \(readyAt :: Maybe UTCTime, endTime :: Maybe UTCTime, serverTier :: ServerTier, repoOwner :: RepoOwner, repoName :: RepoName, package :: PackageName) -> do
           startTime <- case readyAt of
             Just s -> pure s
             Nothing -> throw $ OtherError "getBranchDeploymentBillingLineItems: Impossible: readyAt is null"

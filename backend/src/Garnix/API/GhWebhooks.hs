@@ -4,13 +4,13 @@ module Garnix.API.GhWebhooks where
 
 import Data.Text qualified as T
 import Garnix.Async
+import Garnix.Forge.Types (githubAppConfigId)
+import Garnix.GithubInterface (githubRepoInfo)
 import Garnix.Monad
 import Garnix.Monad.Async (emptyPromise, logPromiseErrors)
 import Garnix.Monad.Concurrency (forkM)
 import Garnix.Orchestrator
 import Garnix.Prelude
-import Garnix.Reporters.GithubReporter (mkGithubReporter)
-import Garnix.Reporters.OpenSearchReporter (openSearchReporter)
 import Garnix.Types as Types
 import GitHub (untagId)
 import GitHub.App.Auth qualified as GH
@@ -71,22 +71,21 @@ ghWebhookCheckSuite ev
       (iAuth, tok) <- getAuthAndToken (whChecksInstallationId <$> evCheckSuiteInstallation ev)
       let commitInfo =
             CommitInfo
-              { _commitInfoReqUser = GhLogin . whUserLogin $ senderOfEvent ev,
+              { _commitInfoReqUser = ForgeLogin . whUserLogin $ senderOfEvent ev,
                 _commitInfoRepoPublicity = RepoIsPublic . not . whRepoIsPrivate $ repoForEvent ev,
-                _commitInfoRepoInfo = RepoInfo iAuth tok owner' repo',
+                _commitInfoRepoInfo = githubRepoInfo iAuth tok owner' repo',
                 _commitInfoBranch = branch',
                 _commitInfoPrFromFork = Nothing,
                 _commitInfoCommit = commit'
               }
-      clientId <- view #githubAppId
+      clientId <- githubAppConfigId <$> githubAppConfig
       isGarnixApp <- case checkSuite' ^. app of
         Nothing ->
           throw $ OtherError "Check suite without app. Don't know how to proceed"
         Just app -> do
           pure (app ^. id == untagId clientId)
-      let reporter = openSearchReporter <> mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit)
       if isGarnixApp
-        then handleCommit reporter (evCheckSuiteAction ev == CheckSuiteEventActionRerequested) commitInfo
+        then dispatchForgeEvent (CommitBuild (evCheckSuiteAction ev == CheckSuiteEventActionRerequested) commitInfo)
         else do
           log Informational "Ignoring check suite event from non-Garnix app"
           emptyPromise
@@ -100,21 +99,30 @@ ghWebhookCheckSuite _ = emptyPromise
 ghWebhookCheckRun :: (HasCallStack) => CheckRunEvent -> M ()
 ghWebhookCheckRun ev
   | evCheckRunAction ev == CheckRunEventActionRerequested = forkM $ do
-      let ghRunId = GhRunId . fromIntegral . whCheckRunId $ evCheckRunCheckRun ev
-          reqUser = GhLogin . whUserLogin $ senderOfEvent ev
+      let checkRun = evCheckRunCheckRun ev
+          reqUser = ForgeLogin . whUserLogin $ senderOfEvent ev
+      -- We recover which build to rerun from the check run's external_id, which we
+      -- set to the build id when creating the check run.
       -- The trick to getting GitHub to properly display the run as re-running is
       -- to create a *new* build with the same name as the old one.
       -- See https://github.com/orgs/community/discussions/38288
+      originalBuildId <- case whCheckRunExternalId checkRun ^? hashIdText of
+        Just hashId -> pure $ BuildId hashId
+        Nothing ->
+          throw
+            $ OtherError
+            $ "check_run rerequested without a valid external_id: "
+            <> whCheckRunExternalId checkRun
       (iAuth, token) <- getAuthAndToken (whChecksInstallationId <$> evCheckRunInstallation ev)
       let rerunEvent =
             RerunEvent
               { reqUser,
-                ghRunId,
+                originalBuildId,
                 installAuth = iAuth,
                 token,
                 repoIsPublic = RepoIsPublic . not . whRepoIsPrivate $ repoForEvent ev
               }
-      handleRerun rerunEvent
+      void $ dispatchForgeEvent (Rerun rerunEvent)
   | otherwise = pure ()
 
 -- | Triggers two things:
@@ -152,15 +160,14 @@ ghWebhookPullRequest ev = do
               else Nothing
       let commitInfo =
             CommitInfo
-              { _commitInfoReqUser = GhLogin . whUserLogin $ senderOfEvent ev,
+              { _commitInfoReqUser = ForgeLogin . whUserLogin $ senderOfEvent ev,
                 _commitInfoRepoPublicity = RepoIsPublic . not . whRepoIsPrivate $ repoForEvent ev,
-                _commitInfoRepoInfo = RepoInfo iAuth tok owner' repo',
+                _commitInfoRepoInfo = githubRepoInfo iAuth tok owner' repo',
                 _commitInfoBranch = Nothing,
                 _commitInfoPrFromFork = prFromFork,
                 _commitInfoCommit = commit'
               }
-      let reporter = openSearchReporter <> mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit)
-      handlePullRequest reporter commitInfo (GhPullRequestId $ fromIntegral $ ev ^. number)
+      dispatchForgeEvent (PullRequestBuild commitInfo (PullRequestId $ fromIntegral $ ev ^. number))
 
     getFromTo :: PullRequestEvent -> M (HookRepository, HookRepository)
     getFromTo ev = do
@@ -186,34 +193,33 @@ ghWebhookPush ev
         Just c -> pure $ CommitHash c
       reqUser <- case evPushSender ev of
         Nothing -> throw $ OtherError "Push without a sender"
-        Just s -> pure . GhLogin . whUserLogin $ s
+        Just s -> pure . ForgeLogin . whUserLogin $ s
       let commitInfo =
             CommitInfo
               { _commitInfoReqUser = reqUser,
                 _commitInfoRepoPublicity = RepoIsPublic . not . whRepoIsPrivate $ repoForEvent ev,
-                _commitInfoRepoInfo = RepoInfo iAuth tok owner' repo',
+                _commitInfoRepoInfo = githubRepoInfo iAuth tok owner' repo',
                 _commitInfoBranch = branch',
                 _commitInfoPrFromFork = Nothing,
                 _commitInfoCommit = commit'
               }
-      let reporter = openSearchReporter <> mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit)
-      handleCommit reporter False commitInfo
+      dispatchForgeEvent (CommitBuild False commitInfo)
   where
     branch' = case T.splitOn "/" (evPushRef ev) of
       "refs" : "heads" : rest -> Just . Branch $ T.intercalate "/" rest
       _ -> Nothing
 
-parseRepoFullname :: Text -> M (GhRepoOwner, GhRepoName)
+parseRepoFullname :: Text -> M (RepoOwner, RepoName)
 parseRepoFullname name =
   case T.splitOn "/" name of
-    [o, r] -> pure (GhRepoOwner (GhLogin o), GhRepoName r)
+    [o, r] -> pure (RepoOwner (ForgeLogin o), RepoName r)
     x ->
       throw
         . OtherError
         $ "Expected full name to split in two. Got: "
         <> show x
 
-getAuthAndToken :: Maybe Int -> M (GH.InstallationAuth, GhToken)
+getAuthAndToken :: Maybe Int -> M (GH.InstallationAuth, ForgeToken)
 getAuthAndToken =
   \case
     Nothing -> throw $ OtherError "Installation in check suite was Nothing"

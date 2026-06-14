@@ -192,7 +192,7 @@ _costBreakdown m =
                     " (" <> show inc <> " included in plan, " <> show notInc <> " not included at " <> tierCostStr <> " each)"
       )
 
-checkEntitlement :: Maybe GhPullRequestId -> DeployPlan -> GhRepoOwner -> M ()
+checkEntitlement :: Maybe PullRequestId -> DeployPlan -> RepoOwner -> M ()
 checkEntitlement mPrId plan repoOwner = do
   hostingLimits <- Entitlements.getHosting repoOwner
   case mPrId of
@@ -201,7 +201,7 @@ checkEntitlement mPrId plan repoOwner = do
         $ throw
         $ EntitlementError
         $ "Sorry, hosting is not allowed for "
-        <> getGhLogin (getGhRepoOwner repoOwner)
+        <> getForgeLogin (getRepoOwner repoOwner)
         <> "."
       usedMinutes <- DB.getPrDeployDurationForOwner repoOwner
       when (usedMinutes > hostingLimits ^. #maxPrDeploymentTime)
@@ -256,7 +256,7 @@ checkSubdomainValidity ::
   [Build] ->
   M ()
 checkSubdomainValidity
-  (RepoInfo _ _ (GhRepoOwner (GhLogin repoOwner')) (GhRepoName repoName'))
+  (RepoInfo _ (RepoOwner (ForgeLogin repoOwner')) (RepoName repoName'))
   deploymentType
   wantedServers = do
     unless (isValidSubdomainString repoOwner')
@@ -335,11 +335,11 @@ startServer = curry4
               [ "Server has been successfully deployed to: https://"
                   <> getPackageName (serverToSpinUp ^. #build . package)
                   <> "."
-                  <> fromDeploymentType getBranch (("pull-" <>) . show . getGhPullRequestId) deploymentType
+                  <> fromDeploymentType getBranch (("pull-" <>) . show . getPullRequestId) deploymentType
                   <> "."
-                  <> getGhRepoName (commitInfo ^. repoInfo . ghRepoName)
+                  <> getRepoName (commitInfo ^. repoInfo . ghRepoName)
                   <> "."
-                  <> getGhLogin (getGhRepoOwner (commitInfo ^. repoInfo . ghRepoOwner))
+                  <> getForgeLogin (getRepoOwner (commitInfo ^. repoInfo . ghRepoOwner))
                   <> ".garnix.me",
                 "ipv4: " <> serverInfo ^. ipv4Addr,
                 "ipv6: " <> serverInfo ^. ipv6Addr,
@@ -375,11 +375,11 @@ redeployServer reporter commitInfo deploymentType serverInfo build = do
                 [ "Server has been successfully redeployed to: https://"
                     <> getPackageName (build ^. package)
                     <> "."
-                    <> fromDeploymentType getBranch (("pull-" <>) . show . getGhPullRequestId) deploymentType
+                    <> fromDeploymentType getBranch (("pull-" <>) . show . getPullRequestId) deploymentType
                     <> "."
-                    <> getGhRepoName (commitInfo ^. repoInfo . ghRepoName)
+                    <> getRepoName (commitInfo ^. repoInfo . ghRepoName)
                     <> "."
-                    <> getGhLogin (getGhRepoOwner (commitInfo ^. repoInfo . ghRepoOwner))
+                    <> getForgeLogin (getRepoOwner (commitInfo ^. repoInfo . ghRepoOwner))
                     <> ".garnix.me",
                   "ipv4: " <> serverInfo ^. ipv4Addr,
                   "ipv6: " <> serverInfo ^. ipv6Addr,

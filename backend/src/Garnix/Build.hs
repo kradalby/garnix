@@ -6,7 +6,6 @@ module Garnix.Build
 where
 
 import Control.Concurrent.Async.Lifted
-import Cradle hiding (ExitCode)
 import Garnix.Async
 import Garnix.Build.Checkout (withAuthorization)
 import Garnix.Build.Checkout qualified as Checkout
@@ -29,7 +28,7 @@ import Garnix.Reporters.OpenSearchReporter (openSearchReporter)
 import Garnix.Types as Types
 import Garnix.YamlConfig (flakeDir)
 
-buildModule :: GhLogin -> ModuleValues.GetRepoAndModuleValues -> M CommitInfo
+buildModule :: ForgeLogin -> ModuleValues.GetRepoAndModuleValues -> M CommitInfo
 buildModule reqUser modules = do
   commitInfo <- Module.getCommitInfo reqUser modules
   let reporter = openSearchReporter <> mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit)
@@ -67,8 +66,8 @@ rerunBuild :: Reporter -> Build -> CommitInfo -> M ()
 rerunBuild reporter build commitInfo = do
   MetaCheck.update reporter commitInfo
   runReporter <- createNewRun reporter $ ReportBuild (reportNameForBuild build) build
-  let build' = build & githubRunId .~ Garnix.Monad.ghRunId runReporter
-  DB.reportBuildResultDB build' <?> "Adding build github ID to DB"
+  let build' = build
+  DB.reportBuildResultDB build' <?> "Persisting build to DB"
   reportOnError runReporter build' commitInfo $ do
     repoConfig <- DB.getRepoConfig (commitInfo ^. repoInfo . ghRepoOwner) (commitInfo ^. repoInfo . ghRepoName)
     plan <- Entitlements.getPlan (build ^. repoUser)
