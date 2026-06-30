@@ -147,7 +147,8 @@ defaultIncludeSection =
     AttributeMatcher "defaultPackage" "x86_64-linux" Nothing,
     AttributeMatcher "devShell" "x86_64-linux" Nothing,
     AttributeMatcher "homeConfigurations" "*" Nothing,
-    AttributeMatcher "darwinConfigurations" "*" Nothing,
+    -- darwinConfigurations omitted by default: this self-host has no macOS
+    -- builders. Repos that want Darwin opt in via their own garnix.yaml include.
     AttributeMatcher "nixosConfigurations" "*" Nothing
   ]
 
