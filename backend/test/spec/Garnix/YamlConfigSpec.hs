@@ -26,7 +26,6 @@ spec = do
                     - "defaultPackage.x86_64-linux"
                     - "devShell.x86_64-linux"
                     - "homeConfigurations.*"
-                    - "darwinConfigurations.*"
                     - "nixosConfigurations.*"
                   exclude: []
 
