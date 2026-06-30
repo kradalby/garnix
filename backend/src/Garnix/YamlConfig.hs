@@ -89,7 +89,18 @@ getConfig = do
           case eDecoded of
             Left e -> throw $ DecodeConfigError . cs $ prettyPrintParseException e
             Right decoded -> pure decoded
-        else pure def
+        else
+          -- No per-repo garnix.yaml: fall back to the instance default. If
+          -- GARNIX_DEFAULT_CONFIG points at a file, decode it (same garnix.yaml
+          -- format) so the default build set is configurable at deploy time
+          -- without recompiling. Otherwise use the built-in `def`.
+          liftIO (lookupEnv "GARNIX_DEFAULT_CONFIG") >>= \case
+            Nothing -> pure def
+            Just path -> do
+              eDecoded <- liftIO $ decodeFileEither path
+              case eDecoded of
+                Left e -> throw $ DecodeConfigError . cs $ prettyPrintParseException e
+                Right decoded -> pure decoded
 
 decodeConfig :: ByteString -> Either String GarnixConfig
 decodeConfig = first prettyPrintParseException . decodeEither'
@@ -147,8 +158,7 @@ defaultIncludeSection =
     AttributeMatcher "defaultPackage" "x86_64-linux" Nothing,
     AttributeMatcher "devShell" "x86_64-linux" Nothing,
     AttributeMatcher "homeConfigurations" "*" Nothing,
-    -- darwinConfigurations omitted by default: this self-host has no macOS
-    -- builders. Repos that want Darwin opt in via their own garnix.yaml include.
+    AttributeMatcher "darwinConfigurations" "*" Nothing,
     AttributeMatcher "nixosConfigurations" "*" Nothing
   ]
 
