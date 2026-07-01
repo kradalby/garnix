@@ -51,6 +51,7 @@ import Servant.GitHub.Webhook
 import System.Directory
 import System.Environment (getEnv)
 import System.Systemd.Daemon (notifyReady)
+import Text.Read (readMaybe)
 import WithCli (HasArguments, withCli)
 
 run :: IO ()
@@ -250,12 +251,20 @@ withEnv testFeatures buildLogsDir buildLogsReportingPort action = do
               10
         )
   metrics <- registerMetrics
-  nixEvalPool <- Garnix.Monad.Pool.newPool 50 metrics #evalQueueWaitTime #evalQueueLen
-  s3UploadPool <- Garnix.Monad.Pool.newPool 100 metrics #s3QueueWaitTime #s3QueueLen
+  -- Pool sizes are overridable via env vars so small self-hosted instances can
+  -- bound memory (each nix eval costs hundreds of MB; the SaaS defaults assume
+  -- large machines). Defaults match the historical hard-coded values.
+  let poolSizeFromEnv name def =
+        maybe def (fromMaybe def . readMaybe) <$> lookupEnv name
+  nixEvalPoolSize <- poolSizeFromEnv "GARNIX_NIX_EVAL_POOL_SIZE" 50
+  nixEvalPool <- Garnix.Monad.Pool.newPool nixEvalPoolSize metrics #evalQueueWaitTime #evalQueueLen
+  s3UploadPoolSize <- poolSizeFromEnv "GARNIX_S3_UPLOAD_POOL_SIZE" 100
+  s3UploadPool <- Garnix.Monad.Pool.newPool s3UploadPoolSize metrics #s3QueueWaitTime #s3QueueLen
   Cradle.StdoutTrimmed hostname <- Cradle.run $ Cradle.cmd "hostname"
   mocks <- envMocks testFeatures
   featureFlagConfig <- getFeatureFlagConfig
-  fodCheckPool <- Garnix.Monad.Pool.newPool 20 metrics #fodCheckQueueWaitTime #fodCheckQueueLen
+  fodCheckPoolSize <- poolSizeFromEnv "GARNIX_FOD_CHECK_POOL_SIZE" 20
+  fodCheckPool <- Garnix.Monad.Pool.newPool fodCheckPoolSize metrics #fodCheckQueueWaitTime #fodCheckQueueLen
   withDefaultLogger $ \defaultLogger -> do
     let env =
           Env
