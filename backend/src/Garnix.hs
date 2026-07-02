@@ -136,6 +136,13 @@ withEnv testFeatures buildLogsDir buildLogsReportingPort action = do
             raw <- readFile path
             pure $ GhLogin <$> nonEmpty (trim (cs raw))
           else pure Nothing
+  -- Self-hosted owner allowlist: GARNIX_ALLOWED_OWNERS is a comma-separated list
+  -- of GitHub owners allowed to build. Unset/empty ⇒ allow all (upstream default).
+  allowedBuildOwners <-
+    lookupEnv "GARNIX_ALLOWED_OWNERS" <&> \mEnv ->
+      case maybe [] (filter (not . T.null) . map T.strip . T.splitOn "," . cs) mEnv of
+        [] -> Nothing
+        owners -> Just (map GhLogin owners)
   s3CacheEnabled <-
     lookupEnv "S3_CACHE_ENABLED" <&> \case
       Just v | T.toLower (cs v) == "false" -> False
@@ -275,6 +282,7 @@ withEnv testFeatures buildLogsDir buildLogsReportingPort action = do
               githubClientSecret = ghClientSecret,
               githubClientId = ghClientId,
               adminGithubLogin = adminGhLogin,
+              allowedBuildOwners = allowedBuildOwners,
               buildLogsReportingPort = buildLogsReportingPort,
               workingDir = curDir,
               nixXdgCacheDir = Nothing,

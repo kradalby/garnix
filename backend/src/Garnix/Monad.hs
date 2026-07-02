@@ -67,6 +67,9 @@ data Env = Env
     githubClientSecret :: Text,
     githubClientId :: Text,
     adminGithubLogin :: Maybe GhLogin,
+    -- | Self-hosted owner allowlist. Nothing = allow all (upstream default);
+    -- Just os = only these GitHub owners may build (GARNIX_ALLOWED_OWNERS).
+    allowedBuildOwners :: Maybe [GhLogin],
     buildLogsReportingPort :: Maybe Int,
     githubInterface :: GithubInterface,
     -- | A thread-safe version of `CWD`
