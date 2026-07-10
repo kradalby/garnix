@@ -20,7 +20,8 @@ import Garnix.Monad
 import Garnix.Monad.Async (joinAll, joinAll_, resolve, spawn)
 import Garnix.Prelude
 import Garnix.Types as Types
-import Garnix.YamlConfig (Action, ExcludeBranches (..), GarnixConfig, IncrementalizeBuildsSection (..), flakeDir, incrementalizeBuildsSection)
+import Garnix.BuildLogs.Types (mkLogLine)
+import Garnix.YamlConfig (Action, ActionTrigger (..), ExcludeBranches (..), GarnixConfig, IncrementalizeBuildsSection (..), flakeDir, incrementalizeBuildsSection, trigger)
 
 runBuildFlake :: (HasCallStack) => Reporter -> BuildKind -> CommitInfo -> Remote -> M ()
 runBuildFlake reporter buildKind commitInfo withCheckout = do
@@ -42,28 +43,44 @@ runBuildFlake reporter buildKind commitInfo withCheckout = do
             DB.setCommitStatus (commitInfo ^. repoInfo . ghRepoOwner) (commitInfo ^. repoInfo . ghRepoName) (commitInfo ^. commit) Evaluated
             reportBuildResult startingBuildRunReporter updatedBuild
 
+            -- Success-triggered actions must not start alongside the builds
+            -- they gate on; they run (or are concluded unrun) only once every
+            -- build's outcome is known.
+            let (successActions, pushActions) =
+                  partition (\(_, _, a) -> a ^. trigger == ActionTriggerSuccess) initialActions
+
             FodCheck.withFodChecker reporter commitInfo $ \fodChecker -> do
+              let spawnAction (initialBuild, runReporter, actionConfig) =
+                    spawn
+                      $ buildAndRunAction
+                        reporter
+                        fodChecker
+                        runReporter
+                        commitInfo
+                        buildKind
+                        (config ^. flakeDir)
+                        repoConfig
+                        initialBuild
+                        actionConfig
               buildPromises <- forM initialBuilds $ \(initialBuild, runReporter) -> do
                 spawn $ doBuild fodChecker runReporter buildKind (config ^. flakeDir) repoConfig initialBuild
-              actionPromises <- forM initialActions $ \(initialBuild, runReporter, actionConfig) -> do
-                spawn
-                  $ buildAndRunAction
-                    reporter
-                    fodChecker
-                    runReporter
-                    commitInfo
-                    buildKind
-                    (config ^. flakeDir)
-                    repoConfig
-                    initialBuild
-                    actionConfig
+              actionPromises <- forM pushActions spawnAction
               builds <- joinAll buildPromises >>= resolve
               joinAll_ actionPromises >>= resolve
 
               let allBuildsSucceeded = all (\build -> build ^. status == Just Success) builds
 
-              when allBuildsSucceeded $ do
-                Modules.publish reporter config commitInfo
+              if allBuildsSucceeded
+                then do
+                  successPromises <- forM successActions spawnAction
+                  Modules.publish reporter config commitInfo
+                  joinAll_ successPromises >>= resolve
+                else
+                  -- Their checks were registered up-front by setupActions;
+                  -- conclude them so they never hang queued.
+                  forM_ successActions $ \(_, runReporter, _) -> do
+                    reportLogs runReporter (mkLogLine "Not run: not all builds succeeded.")
+                    reportComplete runReporter RunReportStatusCancelled
 
               if allBuildsSucceeded
                 then MetaCheck.updateSuccess commitInfo metaCheckRun

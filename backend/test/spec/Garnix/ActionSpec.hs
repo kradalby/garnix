@@ -387,6 +387,65 @@ spec = do
             let finalReport = report ^?! _last . _2
             finalReport ^. status `shouldBeM` RunReportStatusSuccess
 
+      context "success-triggered actions" $ do
+        let successYaml =
+              cs
+                [i|
+                  actions:
+                    - on: success
+                      run: test-action
+                |]
+        let handleCommitWithYaml ghState yaml flake = do
+              let commitInfo =
+                    defaultCommitInfo
+                      & repoInfo . ghRepoOwner .~ "garnix-io"
+                      & repoInfo . ghRepoName .~ "repo"
+                      & reqUser .~ "garnix-io"
+              GH.withLocalRepo ghState "garnix-io" "repo" identity commitInfo (GH.setupWithConfig flake $ Just yaml) $ \commitInfo -> do
+                let reporter = mkGithubReporter (commitInfo ^. repoInfo) (commitInfo ^. commit)
+                void $ try $ resolve =<< Orchestrator.handleCommit reporter True commitInfo
+                pure commitInfo
+
+        it "runs the action once all builds succeed" $ GH.withFakeGithubInterface $ \ghState -> do
+          void $ handleCommitWithYaml ghState successYaml $ flakeFromScript "echo test-message"
+          report <- GH.getReports ghState >>= GH.assertSingleRunForReport "action test-action"
+          let finalReport = report ^?! _last . _2
+          (finalReport ^. status, finalReport ^. logs) `shouldBeM` (RunReportStatusSuccess, "test-message\n")
+
+        it "does not run the action when a build fails" $ GH.withFakeGithubInterface $ \ghState -> do
+          -- Same app plus a package that fails to build: the success action
+          -- must be concluded unrun, not executed.
+          let flake =
+                cs
+                  [i|
+                    {
+                      # If you update this, update also places where it matches.
+                      # Search for INNER_NIXPKGS_MATCHES
+                      inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11-small";
+                      outputs = { self, nixpkgs }: {
+                        packages.x86_64-linux.broken = derivation {};
+                        apps.x86_64-linux.test-action = {
+                          type = "app";
+                          program =
+                            let
+                              pkgs = import nixpkgs { system = "x86_64-linux"; };
+                            in
+                              builtins.toString (
+                                pkgs.writeScript "script.sh"
+                                  ''#!${pkgs.bash}/bin/bash
+                                    echo test-message
+                                  ''
+                              );
+                        };
+                      };
+                    }
+                  |]
+          void $ handleCommitWithYaml ghState successYaml flake
+          report <- GH.getReports ghState >>= GH.assertSingleRunForReport "action test-action"
+          let finalReport = report ^?! _last . _2
+          (finalReport ^. status, finalReport ^. logs)
+            `shouldBeM` (RunReportStatusCancelled, "Not run: not all builds succeeded.\n")
+
       context "secrets" $ do
         it "gives access to the secret key for that action"
           $ GH.withFakeGithubInterface
