@@ -254,6 +254,7 @@ withTestEnvironment tempDir action = do
       Just emptyDir' <- lookupEnv "EMPTY_DIR"
       featureFlagConfig <- getFeatureFlagConfig
       fodCheckPool <- Garnix.Monad.Pool.newPool 40 metrics #fodCheckQueueWaitTime #fodCheckQueueLen
+      nixBuildPool <- Garnix.Monad.Pool.newPool 40 metrics #nixBuildQueueWaitTime #nixBuildQueueLen
       withDefaultLogger $ \defaultLogger -> do
         ghInterface <- Deprecated.testGithubInterface tempDir buildRef
         let env =
@@ -301,7 +302,8 @@ withTestEnvironment tempDir action = do
                   hostname = "garnix-server-test",
                   githubLogDebounceDuration = fromSeconds 0,
                   featureFlagConfig,
-                  fodCheckPool
+                  fodCheckPool,
+                  nixBuildPool
                 }
         action env
   where

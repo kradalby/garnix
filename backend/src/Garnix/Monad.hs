@@ -98,7 +98,12 @@ data Env = Env
     hostname :: Text,
     githubLogDebounceDuration :: Duration,
     featureFlagConfig :: FeatureFlagConfig,
-    fodCheckPool :: Garnix.Monad.Pool.Pool ()
+    fodCheckPool :: Garnix.Monad.Pool.Pool (),
+    -- | Bounds concurrent @nix build@ dispatch (keyed by repo owner, like the
+    -- eval pool). Without it every attribute of a flake fires @nix build@ at
+    -- once, oversubscribing memory and — because the build timeout wraps the
+    -- queue wait — making backlogged builds spuriously time out.
+    nixBuildPool :: Garnix.Monad.Pool.Pool GhRepoOwner
   }
   deriving stock (Generic)
 

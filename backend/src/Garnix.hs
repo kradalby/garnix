@@ -29,6 +29,7 @@ import Garnix.GithubInterface
 import Garnix.Monad
 import Garnix.Monad.Metrics (registerMetrics, serveMetrics)
 import Garnix.Monad.Pool qualified
+import Garnix.Reconcile (reconcileOrphanedBuilds)
 import Garnix.NixConfig (defaultNixConfig)
 import Garnix.Prelude
 import Garnix.Types
@@ -272,6 +273,11 @@ withEnv testFeatures buildLogsDir buildLogsReportingPort action = do
   featureFlagConfig <- getFeatureFlagConfig
   fodCheckPoolSize <- poolSizeFromEnv "GARNIX_FOD_CHECK_POOL_SIZE" 20
   fodCheckPool <- Garnix.Monad.Pool.newPool fodCheckPoolSize metrics #fodCheckQueueWaitTime #fodCheckQueueLen
+  -- Caps concurrent realisation. Previously unbounded (every attr fired `nix
+  -- build` at once); the default keeps large instances effectively unthrottled
+  -- while small self-hosted ones set it near their builder's core count.
+  nixBuildPoolSize <- poolSizeFromEnv "GARNIX_NIX_BUILD_POOL_SIZE" 50
+  nixBuildPool <- Garnix.Monad.Pool.newPool nixBuildPoolSize metrics #nixBuildQueueWaitTime #nixBuildQueueLen
   withDefaultLogger $ \defaultLogger -> do
     let env =
           Env
@@ -322,7 +328,8 @@ withEnv testFeatures buildLogsDir buildLogsReportingPort action = do
               hostname = hostname,
               githubLogDebounceDuration = fromSeconds @Int 15,
               featureFlagConfig,
-              fodCheckPool
+              fodCheckPool,
+              nixBuildPool
             }
     action env
 
@@ -345,6 +352,14 @@ runWith opts = do
     (Garnix.buildLogsReportingPort opts)
     $ \env -> do
       serveMetrics (Garnix.metricsPort opts) (env ^. #metrics)
+      -- Fail over builds orphaned by the previous process before accepting any
+      -- webhooks, so nothing live can be caught by it: closes their spinning
+      -- GitHub check runs, then marks them cancelled. Best-effort — a reconciler
+      -- error must not block startup.
+      runM env reconcileOrphanedBuilds >>= \case
+        Right n | n > 0 -> hPutStrLn stderr $ "Startup reconciler: aborted " <> show n <> " orphaned build(s)"
+        Right _ -> pure ()
+        Left e -> hPutStrLn stderr $ "Startup reconciler failed: " <> show e
       let settings =
             Warp.defaultSettings
               & Warp.setPort (port opts)

@@ -9,6 +9,7 @@ import Database.PostgreSQL.Typed qualified as PSQL
 import Garnix.DB qualified as DB
 import Garnix.Monad (M, throw)
 import Garnix.Nix.Types (DrvPath (..), StoreHash (..), StorePath (..))
+import Garnix.Reconcile qualified as Reconcile
 import Garnix.Prelude
 import Garnix.TestHelpers (testBuild, truncateDBM)
 import Garnix.TestHelpers.Monad (beforeM_, inM, shouldBeM, shouldReturnM)
@@ -21,6 +22,34 @@ import Test.QuickCheck (generate, shuffle)
 
 spec :: Spec
 spec = do
+  describe "abortOrphanedBuilds" $ inM $ beforeM_ truncateDBM $ do
+    it "cancels in-flight builds and leaves finished ones untouched" $ do
+      orphan <- testBuild (status .~ Nothing)
+      done <- testBuild (status ?~ Success)
+      n <- DB.abortOrphanedBuilds
+      liftIO $ n `shouldBe` 1
+      (view status <$> DB.getBuild (orphan ^. id)) `shouldReturnM` Just Cancelled
+      view endTime <$> DB.getBuild (orphan ^. id) >>= \e -> liftIO (e `shouldSatisfy` isJust)
+      (view status <$> DB.getBuild (done ^. id)) `shouldReturnM` Just Success
+    it "is idempotent: a second pass finds no orphans" $ do
+      void $ testBuild (status .~ Nothing)
+      void DB.abortOrphanedBuilds
+      DB.abortOrphanedBuilds >>= \n -> liftIO (n `shouldBe` 0)
+
+  describe "reconcileOrphanedBuilds" $ inM $ beforeM_ truncateDBM $ do
+    it "cancels orphans across repos (closing their github checks) and leaves finished builds" $ do
+      o1 <- testBuild (status .~ Nothing)
+      -- Give o1 a github check-run id so the reconciler exercises the close path
+      -- (the mock github interface records the updateBuildReport call).
+      void $ DB.pgExec [pgSQL| UPDATE builds SET github_run_id = 7 WHERE id = ${o1 ^. id} |]
+      o2 <- testBuild ((status .~ Nothing) . (repoName .~ "other-repo"))
+      done <- testBuild (status ?~ Success)
+      n <- Reconcile.reconcileOrphanedBuilds
+      liftIO $ n `shouldBe` 2
+      (view status <$> DB.getBuild (o1 ^. id)) `shouldReturnM` Just Cancelled
+      (view status <$> DB.getBuild (o2 ^. id)) `shouldReturnM` Just Cancelled
+      (view status <$> DB.getBuild (done ^. id)) `shouldReturnM` Just Success
+
   describe "newBuild" $ inM $ beforeM_ truncateDBM $ do
     it "allows duplicate builds" $ do
       user <-

@@ -1187,6 +1187,39 @@ reportBuildResultDB build = do
     1 -> pure ()
     _ -> throw $ OtherError "Somehow updated more than 0 or 1 columns"
 
+-- | Every still-in-flight build (@status IS NULL@). The startup reconciler reads
+-- these before it cancels them, so it can close their GitHub check runs.
+getOrphanedBuilds :: M [Build]
+getOrphanedBuilds =
+  pgQueryPrism
+    _Build
+    [pgSQL|
+    SELECT
+      id, repo_user, repo_name, pr_from_fork, branch, repo_is_public,
+      git_commit, package, package_type, system, req_user, status,
+      start_time, end_time, drv_path, output_paths, github_run_id,
+      persistence_name, wants_incrementalism, eval_host, uploaded_to_cache,
+      already_built
+    FROM builds
+    WHERE status IS NULL
+  |]
+
+-- | Mark every still-in-flight build (@status IS NULL@) as cancelled. Meant to
+-- run once at startup, before webhooks are served: after a crash/restart the
+-- previous process's @spawn@ed build threads are gone, but their rows stay
+-- "pending" forever (there is no other resumption). Returns the number reset.
+-- The authoritative DB step of the reconciler ('Garnix.Reconcile'), which first
+-- closes the orphans' GitHub check runs so they stop spinning.
+abortOrphanedBuilds :: M Int
+abortOrphanedBuilds = do
+  now <- liftIO getCurrentTime
+  pgExec
+    [pgSQL|
+      UPDATE builds
+      SET status = 'cancelled', end_time = ${Just now}
+      WHERE status IS NULL
+    |]
+
 upsertHeartbeat :: [Text] -> M ()
 upsertHeartbeat hosts =
   forM_ hosts $ \host -> do
