@@ -37,10 +37,11 @@ spec = do
       DB.abortOrphanedBuilds >>= \n -> liftIO (n `shouldBe` 0)
 
   describe "reconcileOrphanedBuilds" $ inM $ beforeM_ truncateDBM $ do
-    it "cancels orphans across repos (closing their github checks) and leaves finished builds" $ do
-      o1 <- testBuild (status .~ Nothing)
-      -- Give o1 a github check-run id so the reconciler exercises the close path
-      -- (the mock github interface records the updateBuildReport call).
+    it "cancels orphans across repos (closing recent github checks) and leaves finished builds" $ do
+      now <- liftIO getCurrentTime
+      -- o1 is recent and carries a check-run id, so it flows through the
+      -- (backgrounded, best-effort) github-close path against the mock interface.
+      o1 <- testBuild ((status .~ Nothing) . (startTime .~ now))
       void $ DB.pgExec [pgSQL| UPDATE builds SET github_run_id = 7 WHERE id = ${o1 ^. id} |]
       o2 <- testBuild ((status .~ Nothing) . (repoName .~ "other-repo"))
       done <- testBuild (status ?~ Success)

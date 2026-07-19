@@ -1187,10 +1187,13 @@ reportBuildResultDB build = do
     1 -> pure ()
     _ -> throw $ OtherError "Somehow updated more than 0 or 1 columns"
 
--- | Every still-in-flight build (@status IS NULL@). The startup reconciler reads
--- these before it cancels them, so it can close their GitHub check runs.
-getOrphanedBuilds :: M [Build]
-getOrphanedBuilds =
+-- | Recently-started orphans (@status IS NULL@) that still carry a GitHub
+-- check-run id. The startup reconciler reads these before cancelling, so it can
+-- close their spinning check runs. Deliberately bounded — recent, check-bearing,
+-- and capped: the historical backlog of superseded orphans is harmless, and
+-- closing all of it would be a GitHub API burst (the 403 secondary-rate limit).
+getRecentOrphanedChecks :: M [Build]
+getRecentOrphanedChecks =
   pgQueryPrism
     _Build
     [pgSQL|
@@ -1202,6 +1205,10 @@ getOrphanedBuilds =
       already_built
     FROM builds
     WHERE status IS NULL
+      AND github_run_id IS NOT NULL
+      AND start_time > now() - interval '2 hours'
+    ORDER BY start_time DESC
+    LIMIT 200
   |]
 
 -- | Mark every still-in-flight build (@status IS NULL@) as cancelled. Meant to

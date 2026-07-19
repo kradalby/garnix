@@ -5,42 +5,52 @@ import Data.Map.Strict qualified as Map
 import Garnix.Build.Reporting (reportNameForBuild)
 import Garnix.DB qualified as DB
 import Garnix.Monad
+import Garnix.Monad.Concurrency (forkM)
 import Garnix.Prelude
 import Garnix.Types
 import GitHub.Data.Id (Id (..))
 
--- | Startup reconciler — run once, before webhooks are served. After a
--- crash/restart the previous process's build threads are gone, but their rows
--- are still @status IS NULL@ and their GitHub check runs still show "in
--- progress", which on the head commit blocks a PR on a forever-spinning
--- required check. This:
+-- | Startup reconciler — run once, before webhooks are served.
 --
---   1. closes each orphan's GitHub check run (best-effort), then
---   2. marks every orphan @cancelled@ in the DB (authoritative; always runs).
+-- After a crash/restart the previous process's build threads are gone but their
+-- rows are still @status IS NULL@. This clears them all in a single fast
+-- @UPDATE@ ('DB.abortOrphanedBuilds') and returns the count. Running pre-Warp
+-- keeps the guarantee that no live build can be caught.
 --
--- The GitHub step is bounded (only in-flight builds, capped by the build pool)
--- and one-shot, so it is not the crash-loop re-dispatch that triggers GitHub's
--- secondary rate limit. It is nonetheless best-effort: any failure (auth, rate
--- limit, API down) is swallowed so it can never block startup or the DB reset.
--- Returns the number of builds reset.
+-- Separately it closes the GitHub check runs of *recent* orphans so a PR does
+-- not hang on a forever-spinning required check. That work is:
+--
+--   * bounded to recent, check-bearing orphans ('DB.getRecentOrphanedChecks') —
+--     the historical backlog of superseded orphans is harmless, and closing all
+--     of it would be a GitHub API burst (the 403 secondary-rate-limit storm);
+--   * run in the background ('forkM') so it never blocks startup / @notifyReady@
+--     (closing hundreds of checks synchronously here would time out the unit);
+--   * best-effort ('ignoringAllErrors') so a GitHub failure is swallowed.
+--
+-- It operates on rows captured before the cancel, so it cannot race new builds.
 reconcileOrphanedBuilds :: M Int
 reconcileOrphanedBuilds = do
-  orphans <- DB.getOrphanedBuilds
-  let byRepo =
-        Map.toList
-          $ Map.fromListWith (<>) [((b ^. repoUser, b ^. repoName), [b]) | b <- orphans]
-  forM_ byRepo $ \((owner, name), builds) ->
-    ignoringAllErrors $ do
-      getGarnixInstallationId owner name >>= \case
+  recent <- DB.getRecentOrphanedChecks
+  n <- DB.abortOrphanedBuilds
+  unless (null recent) $ forkM $ closeChecks recent
+  pure n
+
+closeChecks :: [Build] -> M ()
+closeChecks builds =
+  forM_ (Map.toList byRepo) $ \((owner, name), bs) ->
+    ignoringAllErrors
+      $ getGarnixInstallationId owner name
+      >>= \case
         Nothing -> pure ()
         Just instId -> do
           iAuth <- getInstallation (Id (fromInteger instId))
           token <- getAccessToken iAuth
           let repoInfo = RepoInfo iAuth token owner name
-          forM_ builds $ \b ->
+          forM_ bs $ \b ->
             forM_ (b ^. githubRunId) $ \runId ->
               ignoringAllErrors $ updateBuildReport runId (cancelledReport b) repoInfo
-  DB.abortOrphanedBuilds
+  where
+    byRepo = Map.fromListWith (<>) [((b ^. repoUser, b ^. repoName), [b]) | b <- builds]
 
 cancelledReport :: Build -> GhRunReport
 cancelledReport b =
