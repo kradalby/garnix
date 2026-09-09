@@ -274,6 +274,7 @@ withTestEnvironment tempDir action = do
                   githubClientSecret = "github-client-secret",
                   githubClientId = "github-client-id",
                   adminGithubLogin = Nothing,
+                  allowedBuildOwners = Nothing,
                   buildLogsReportingPort = Nothing,
                   workingDir = tempDir,
                   nixXdgCacheDir = Nothing,
