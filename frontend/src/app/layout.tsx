@@ -29,6 +29,15 @@ const scriptifyFunction = (fn: () => void) => ({
   __html: `(${fn.toString()})()`,
 });
 
+const plausibleInit = scriptifyFunction(() => {
+  window.plausible =
+    window.plausible ||
+    function () {
+      // @ts-ignore
+      (window.plausible.q = window.plausible.q || []).push(arguments);
+    };
+});
+
 const RootLayout = ({ children }: { children: React.ReactNode }) => {
   const nonce = headers().get("x-nonce") || undefined;
   return (
@@ -45,14 +54,7 @@ const RootLayout = ({ children }: { children: React.ReactNode }) => {
           id="plausible"
           nonce={nonce}
           suppressHydrationWarning
-          dangerouslySetInnerHTML={scriptifyFunction(() => {
-            window.plausible =
-              window.plausible ||
-              function () {
-                // @ts-ignore
-                (window.plausible.q = window.plausible.q || []).push(arguments);
-              };
-          })}
+          dangerouslySetInnerHTML={plausibleInit}
         />
       </head>
       <Providers>

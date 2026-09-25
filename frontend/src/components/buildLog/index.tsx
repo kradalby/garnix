@@ -44,12 +44,14 @@ const LogViewer = (props: {
 }) => {
   const { logs } = props.logStream;
   const [openLog, setOpenLog] = React.useState<string | undefined>();
-  const firstLogGroupName = logs[0]?.[0];
-  React.useEffect(() => {
-    if (firstLogGroupName != null && logs.length === 1) {
-      setOpenLog(firstLogGroupName);
-    }
-  }, [logs.length, firstLogGroupName]);
+  const onlyLogGroupName = logs.length === 1 ? logs[0]?.[0] : undefined;
+  const [prevOnlyLogGroupName, setPrevOnlyLogGroupName] = React.useState<
+    string | undefined
+  >();
+  if (onlyLogGroupName !== prevOnlyLogGroupName) {
+    setPrevOnlyLogGroupName(onlyLogGroupName);
+    if (onlyLogGroupName != null) setOpenLog(onlyLogGroupName);
+  }
   const toggleLog = (logGroupName: string) => {
     setOpenLog(openLog !== logGroupName ? logGroupName : undefined);
   };

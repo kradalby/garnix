@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 function featureLocalStorageName(featureName: string) {
   return `garnixfeature${featureName}`;
@@ -21,10 +21,12 @@ if (typeof window == "object") {
   };
 }
 
+const noopSubscribe = () => () => {};
+
 export function useFeatureFlag(name: string): boolean {
-  const [flag, setFlag] = useState(false);
-  useEffect(() => {
-    setFlag(featureFlag(name));
-  }, [name]);
-  return flag;
+  return useSyncExternalStore(
+    noopSubscribe,
+    () => featureFlag(name),
+    () => false,
+  );
 }

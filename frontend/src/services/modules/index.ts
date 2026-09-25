@@ -411,15 +411,11 @@ export type GetRepoAndModuleValues = z.infer<
   typeof getRepoAndModuleValuesSchema
 >;
 
-const updateRepoAndModuleValuesSchema = z.object({
-  repo_user: z.string(),
-  repo_name: z.string(),
-  user_config: z.array(moduleValueSchema),
-});
-
-export type UpdateRepoAndModuleValues = z.infer<
-  typeof updateRepoAndModuleValuesSchema
->;
+export type UpdateRepoAndModuleValues = {
+  repo_user: string;
+  repo_name: string;
+  user_config: Array<ModuleValue>;
+};
 
 export const getModuleConfig = async (): Promise<
   Result<GetRepoAndModuleValues | null>

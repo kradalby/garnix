@@ -636,12 +636,12 @@ const NullOrInput = <T,>(
     renderChild: (props: InputProps<T>) => React.ReactNode;
   },
 ) => {
-  const lastNonNullValue = React.useRef(
+  const [lastNonNullValue, setLastNonNullValue] = React.useState(
     props.value ?? props.initialElementValue,
   );
-  React.useEffect(() => {
-    if (props.value != null) lastNonNullValue.current = props.value;
-  }, [props.value]);
+  if (props.value != null && props.value !== lastNonNullValue) {
+    setLastNonNullValue(props.value);
+  }
   return (
     <>
       <ToggleSwitch
@@ -649,7 +649,7 @@ const NullOrInput = <T,>(
         value={props.value !== null}
         onChange={() => {
           if (props.value === null) {
-            props.onChange(lastNonNullValue.current);
+            props.onChange(lastNonNullValue);
           } else {
             props.onChange(null);
           }
@@ -659,7 +659,7 @@ const NullOrInput = <T,>(
         {props.renderChild(
           props.value
             ? { value: props.value, onChange: props.onChange }
-            : { value: lastNonNullValue.current, onChange: () => {} },
+            : { value: lastNonNullValue, onChange: () => {} },
         )}
       </Expander>
     </>

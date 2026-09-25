@@ -68,7 +68,11 @@ export const UnstyledIntInput = (
     Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value">,
 ) => {
   const [value, setValue] = React.useState<string>(`${props.value}`);
-  React.useEffect(() => setValue(`${props.value}`), [props.value]);
+  const [prevPropValue, setPrevPropValue] = React.useState(props.value);
+  if (props.value !== prevPropValue) {
+    setPrevPropValue(props.value);
+    setValue(`${props.value}`);
+  }
   return (
     <input
       type="number"
