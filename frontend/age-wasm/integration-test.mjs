@@ -53,6 +53,6 @@ test("bad age key passed in", async () => {
   const result = encrypt("not a valid age key", "hunter2");
   assert.deepEqual(result, {
     ok: false,
-    error: "malformed recipient at line 1",
+    error: "error at line 1: unknown recipient type",
   });
 });

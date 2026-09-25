@@ -1,10 +1,11 @@
 module github.com/garnix-io/garnix/age-wasm
 
-go 1.18
+go 1.26.0
 
-require filippo.io/age v1.0.0
+require filippo.io/age v1.3.2
 
 require (
-	golang.org/x/crypto v0.3.0 // indirect
-	golang.org/x/sys v0.2.0 // indirect
+	filippo.io/hpke v0.4.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )

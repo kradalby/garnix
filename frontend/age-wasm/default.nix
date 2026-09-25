@@ -15,7 +15,7 @@
               src = builtins.filterSource (
                 path: type: lib.hasSuffix ".go" path || lib.hasSuffix "/go.mod" path || lib.hasSuffix "/go.sum" path
               ) ./.;
-              vendorHash = "sha256-icYRGdAd6G3yzBUyhlvIn/FvAC9+FHfX7g2DywYQJ8g=";
+              vendorHash = "sha256-DziDICnUc3zENBBH8mJd3FyCVGUWCEc2vmpKX83+tlA=";
             };
 
         ts-bindings =
