@@ -185,7 +185,7 @@ in
                     opensearch = {
                       hosts = [ "http://[::1]:9200" ];
                       ssl.verificationMode = "none";
-                      requestHeadersWhitelist = [
+                      requestHeadersAllowlist = [
                         "authorization"
                         "securitytenant"
                       ];
