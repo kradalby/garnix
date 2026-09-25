@@ -121,6 +121,24 @@ in
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
       {
+        # The two pins live in different files; OSD only reports a mismatch at
+        # runtime, leaving the dashboards red.
+        assertions =
+          let
+            server = config.services.opensearch.package.version;
+            dashboards = cfg.dashboards.package.version;
+          in
+          [
+            {
+              assertion =
+                !cfg.dashboards.enable
+                || (
+                  lib.versions.major server == lib.versions.major dashboards
+                  && lib.versionAtLeast (lib.versions.majorMinor server) (lib.versions.majorMinor dashboards)
+                );
+              message = "OpenSearch Dashboards ${dashboards} needs an OpenSearch server of the same major and at least its minor version, got ${server}.";
+            }
+          ];
         networking = {
           firewall = {
             allowedTCPPorts = lib.optionals cfg.nginx.openFirewall [
