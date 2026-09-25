@@ -152,7 +152,7 @@
           // namespace "hostingGateway" hosting-gateway.checks
           //
             # NixOS VM tests only build on Linux.
-            lib.optionalAttrs pkgs.stdenv.isLinux {
+            lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               nixosTests_hostingDeploy = import ./nix/tests/hosting-deploy.nix subDirInputs;
             };
 
