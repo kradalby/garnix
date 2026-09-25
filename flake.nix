@@ -10,12 +10,17 @@
     flake-utils.url = "github:numtide/flake-utils";
     pedantix = {
       url = "github:Swarsel/pedantix";
-      inputs.nixpkgs.follows = "nixpkgs";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        treefmt-nix.follows = "treefmt-nix";
+      };
     };
     garnix-guest-lib = {
       url = "github:OSSystems/garnix-guest-lib";
       inputs = {
         nixpkgs.follows = "nixpkgs";
+        pedantix.follows = "pedantix";
+        treefmt-nix.follows = "treefmt-nix";
       };
     };
     treetop = {
