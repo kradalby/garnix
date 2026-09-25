@@ -78,7 +78,7 @@ in
           chmod -R +w .
           ln -sf ${node_modules}/node_modules node_modules
           ${populateArtifacts}
-          npm run ${name} --ci | tee /dev/null
+          npm run ${name} | tee /dev/null
           touch $out
         '';
       })
