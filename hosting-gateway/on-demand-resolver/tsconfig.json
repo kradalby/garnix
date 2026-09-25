@@ -2,6 +2,9 @@
   "compilerOptions": {
     "target": "esnext",
     "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "types": ["node"],
     "lib": ["esnext"],
     "allowJs": true,
     "skipLibCheck": true,
