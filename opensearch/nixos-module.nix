@@ -214,15 +214,17 @@ in
             dataDir = "/opensearch/node";
             package = pkgs.opensearch.overrideAttrs (
               finalAttrs: prevAttrs: {
-                version = "2.12.0";
+                # Held on 2.x: 3.x is a major upgrade of deployed clusters, and rolling
+                # upgrades to it start from 2.19. Dashboards move with this pin.
+                version = "2.19.6";
                 src = pkgs.fetchurl {
                   url = "https://artifacts.opensearch.org/releases/bundle/opensearch/${finalAttrs.version}/opensearch-${finalAttrs.version}-linux-x64.tar.gz";
-                  hash = "sha256-t9s633qDzxvG1x+VVATpczzvD+ojnfTiwB/EambMKtA=";
+                  hash = "sha256-Spe/QVEyxdaQA2sUM7IkjnvDaARF3brwWjO5Bl5B2Ns=";
                 };
                 # nixpkgs' installPhase targets OpenSearch 3.x, which ships a top-level
-                # `agent` directory. The 2.12.0 tarball has no such directory, so the
+                # `agent` directory. 2.x tarballs have no such directory, so the
                 # `cp -R ... agent $out` fails. Provide an empty one to keep the copy
-                # happy; nothing in 2.12.0 reads it.
+                # happy; nothing in 2.x reads it.
                 preInstall = (prevAttrs.preInstall or "") + ''
                   mkdir -p agent
                 '';
