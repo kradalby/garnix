@@ -1,7 +1,7 @@
 import React from "react";
 
 export const useDebounced = (fn: () => void, ms: number) => {
-  const timeoutId = React.useRef<NodeJS.Timeout | undefined>();
+  const timeoutId = React.useRef<NodeJS.Timeout | undefined>(undefined);
   return {
     clear: () => {
       clearTimeout(timeoutId.current);

@@ -14,7 +14,8 @@ import { fromSecs } from "@/utils/duration";
 import { getCommit } from "@/services/commit";
 import styles from "./styles.module.css";
 
-const Page = ({ params }: { params: { slug: string } }) => {
+const Page = (props: { params: Promise<{ slug: string }> }) => {
+  const params = React.use(props.params);
   const commit = useLoading(
     React.useCallback(() => getCommit(params.slug), [params.slug]),
     {

@@ -100,7 +100,9 @@ export const AddPackageModal = (
           placeholder="Search nixpkgs..."
           value={filter}
           onChange={setFilter}
-          ref={(el) => el && el.focus()}
+          ref={(el) => {
+            el?.focus();
+          }}
         />
         <NixpkgsSearch
           filter={filter}

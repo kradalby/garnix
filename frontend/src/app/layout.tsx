@@ -38,8 +38,8 @@ const plausibleInit = scriptifyFunction(() => {
     };
 });
 
-const RootLayout = ({ children }: { children: React.ReactNode }) => {
-  const nonce = headers().get("x-nonce") || undefined;
+const RootLayout = async ({ children }: { children: React.ReactNode }) => {
+  const nonce = (await headers()).get("x-nonce") || undefined;
   return (
     <html lang="en">
       <head>

@@ -9,6 +9,8 @@ const nextConfig = {
   images: { unoptimized: true },
   reactStrictMode: false,
   skipTrailingSlashRedirect: true,
+  // ESM-only; lets next/jest transform it for the CommonJS test runtime.
+  transpilePackages: ["marked"],
   rewrites: () => {
     if (process.env.GARNIX_SERVER_ORIGIN != null) {
       return [

@@ -43,7 +43,7 @@ let
     '';
 
     buildPhase = ''
-      npm run build -- --no-lint
+      npm run build
     '';
 
     installPhase = ''

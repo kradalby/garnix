@@ -456,6 +456,8 @@ describe("modules config page", () => {
         submitter = {
           getAttribute: (name: string) => {
             if (name === "data-submit-action") return "openPr";
+            // React 19 reads it to support form actions.
+            if (name === "formAction") return null;
             throw Error(`not a mocked event submitter attribute: ${name}`);
           },
         };

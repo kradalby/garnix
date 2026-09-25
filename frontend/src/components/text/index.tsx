@@ -7,8 +7,8 @@ const PropSchema = z.object({
   id: z.string().optional(),
   type: z.enum(["p", "h1", "h2", "h3", "proper", "code", "span"]).optional(),
   className: z.string().optional(),
-  children: z.custom(),
-  style: z.custom(),
+  children: z.custom<React.ReactNode>(),
+  style: z.custom<React.CSSProperties>().optional(),
   "data-testid": z.string().optional(),
 });
 

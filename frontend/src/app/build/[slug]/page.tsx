@@ -92,7 +92,8 @@ const createHeaderProps = (module: Build) => {
   ];
 };
 
-const Page = ({ params }: { params: { slug: string } }) => {
+const Page = (props: { params: Promise<{ slug: string }> }) => {
+  const params = React.use(props.params);
   const build = useLoading(
     useCallback(() => getBuild(params.slug), [params.slug]),
     {

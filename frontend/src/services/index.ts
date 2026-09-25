@@ -1,4 +1,4 @@
-import { ZodTypeDef, z } from "zod";
+import { z } from "zod";
 import { formatZodError } from "@/utils/zod";
 
 export type Ok<T> = { ok: true; data: T };
@@ -24,7 +24,7 @@ export const onUnauthorized = (listener: (() => void) | null): void => {
 };
 
 export const fetchFromAPI = async <Input, Output>(
-  schema: z.Schema<Output, ZodTypeDef, Input>,
+  schema: z.ZodType<Output, Input>,
   method: "GET" | "POST" | "DELETE" | "PUT",
   path: string,
   options?: {

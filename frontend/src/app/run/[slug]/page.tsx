@@ -10,7 +10,8 @@ import { Err, Ok } from "@/services";
 import { getRun } from "@/services/run";
 import { RunPage } from "@/components/run";
 
-const Page = ({ params }: { params: { slug: string } }) => {
+const Page = (props: { params: Promise<{ slug: string }> }) => {
+  const params = React.use(props.params);
   const run = useLoading(
     useCallback(() => getRun(params.slug), [params.slug]),
     {

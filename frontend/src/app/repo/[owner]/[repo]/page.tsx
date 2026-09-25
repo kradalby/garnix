@@ -4,7 +4,8 @@ import React from "react";
 import { WithSidebar } from "@/components/withSidebar";
 import { CommitList } from "@/components/commitList";
 
-const Page = ({ params }: { params: { owner: string; repo: string } }) => {
+const Page = (props: { params: Promise<{ owner: string; repo: string }> }) => {
+  const params = React.use(props.params);
   return (
     <WithSidebar>
       <CommitList for={params} />
