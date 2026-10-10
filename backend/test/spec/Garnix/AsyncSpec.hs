@@ -49,9 +49,10 @@ spec = do
           exec sleep 1000
         |]
         $ \scriptFile -> withSystemTempFile "garnix-test" $ \outFile hdl -> do
-          result <- timeout (fromSeconds @Double 0.01) $ run_ $ cmd (cs scriptFile) & addArgs [outFile]
+          result <- timeout (fromSeconds @Int 1) $ run_ $ cmd (cs scriptFile) & addArgs [outFile]
           result `shouldBe` Nothing
           procId <- T.hGetContents hdl
+          strip procId `shouldNotBe` ""
           result <-
             run
               $ cmd "ps"
@@ -69,9 +70,10 @@ spec = do
           exec sleep 10
         |]
         $ \scriptFile -> withSystemTempFile "garnix-test" $ \outFile hdl -> do
-          result <- timeout (fromSeconds @Double 0.1) $ run_ $ cmd (cs scriptFile) & addArgs [outFile]
+          result <- timeout (fromSeconds @Int 1) $ run_ $ cmd (cs scriptFile) & addArgs [outFile]
           result `shouldBe` Nothing
           procId <- T.hGetContents hdl
+          strip procId `shouldNotBe` ""
           result <-
             run
               $ cmd "ps"
