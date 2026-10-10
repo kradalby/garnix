@@ -147,8 +147,7 @@ evaluateAttribute repoConfig cacheDir workingDir build attr = withBubbling $ \bu
             | otherwise = action [] []
       nixConfig <- view #userNixConfig
       withIncrementalExtraArgs $ \incArgs extraSandboxPaths ->
-        (>>= run)
-          $ cmd "comment"
+        cmd "comment"
           & addArgs
             ( [ buildComment build,
                 "--",
@@ -174,8 +173,7 @@ getAppDrvPath repoConfig build workingDir cacheDir attr = do
   let appDerivation = "a: [{ context = builtins.attrNames (builtins.getContext a.program); }]"
   nixConfig <- view #userNixConfig
   (exitCode, StdoutRaw stdout, StderrRaw stderr) <-
-    (>>= run)
-      $ cmd "comment"
+    cmd "comment"
       & addArgs
         [ buildComment build,
           "--",

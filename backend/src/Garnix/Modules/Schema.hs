@@ -107,8 +107,7 @@ readModuleSchema :: FilePath -> M ModuleSchema
 readModuleSchema path = do
   nixConfig <- view #userNixConfig
   (StdoutUntrimmed output, StderrRaw stderr, exitCode) <-
-    (>>= run)
-      $ cmd "nix"
+    cmd "nix"
       & addArgs
         [ "eval",
           path <> "#garnixModules.default",
@@ -124,8 +123,7 @@ readModuleSchema path = do
     throw $ OtherError $ cs stderr
   schema <- aesonDecode "extracted module schema" parseJSON output
   StdoutUntrimmed output <-
-    (>>= run)
-      $ cmd "nix"
+    cmd "nix"
       & addArgs ["flake", "metadata", "--json" :: Text]
       & setWorkingDir path
       & addNixConfigEnvironment nixConfig
