@@ -86,8 +86,7 @@ remoteWithFlake branch values = Checkout.withBeforeAction $ do
       nixConfig <- view #userNixConfig
       dir <- view #workingDir
       result <-
-        (>>= Cradle.run)
-          $ Cradle.cmd "nix"
+        Cradle.cmd "nix"
           & Cradle.addArgs args
           & NixConfig.addNixConfigEnvironment nixConfig
           & Cradle.setWorkingDir dir

@@ -264,7 +264,7 @@ rec {
         chmod go-rwx src/backend/ssh-key-for-tests
         cd src/backend
         cabal configure --ghc-options="-O0"
-        cabal run spec -- --skip @skip-ci --fail-on=focused
+        cabal run spec -- --skip @skip-ci --fail-on=focused "$@"
       '';
     };
   };

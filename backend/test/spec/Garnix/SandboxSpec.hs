@@ -3,15 +3,20 @@ module Garnix.SandboxSpec
   )
 where
 
+import Control.Concurrent (getNumCapabilities, setNumCapabilities)
+import Control.Concurrent.Async.Lifted qualified as Async
 import Control.Monad.Trans.Control (liftBaseOp_)
 import Cradle
 import Data.String.Interpolate
 import Data.Text qualified as T
+import Garnix.Async (timeout)
 import Garnix.Build.Helpers (withInternalCacheToken)
 import Garnix.DB qualified as DB
+import Garnix.Duration (fromSeconds)
 import Garnix.NixConfig (addNixConfigEnvironment, nixConfDefaults)
 import Garnix.Prelude
 import Garnix.Sandbox
+import Garnix.TestHelpers (waitFor)
 import Garnix.TestHelpers.Monad
 import Garnix.Types
 import System.Directory (createDirectoryIfMissing)
@@ -38,7 +43,6 @@ spec = inM $ do
             ]
       StdoutTrimmed dirs <-
         failIfErr
-          $ (>>= run)
           $ cmd "ls"
           & addArgs ["/etc/" :: String]
           & pure
@@ -58,7 +62,6 @@ spec = inM $ do
       T.lines withoutSandbox `shouldContainM` [show randomName]
       StdoutTrimmed withSandbox <-
         failIfErr
-          $ (>>= run)
           $ cmd "ls"
           & addArgs ["/tmp/" :: String]
           & pure
@@ -68,7 +71,6 @@ spec = inM $ do
     it "works with basic nix eval" $ do
       StdoutTrimmed out <-
         failIfErr
-          $ (>>= run)
           $ cmd "nix"
           & addArgs
             [ "eval" :: String,
@@ -96,7 +98,6 @@ spec = inM $ do
         liftIO $ writeFile (dir <> "/flake.nix") flake
         StdoutTrimmed out <-
           failIfErr
-            $ (>>= run)
             $ cmd "nix"
             & setWorkingDir dir
             & addArgs
@@ -115,15 +116,13 @@ spec = inM $ do
         liftIO $ writeFile (dir <> "/foo") ""
         StdoutTrimmed out <-
           failIfErr
-            $ (>>= run)
             $ cmd "ls"
             & addArgs [dir]
             & pure
             & inNixSandbox [(dir, ReadOnly)] Nothing
         out `shouldBeM` "foo"
         exit <-
-          (>>= run)
-            $ cmd "touch"
+          cmd "touch"
             & addArgs [dir <> "/bar"]
             & silenceStderr
             & pure
@@ -133,7 +132,6 @@ spec = inM $ do
     it "creates an empty $HOME" $ do
       StdoutTrimmed out <-
         failIfErr
-          $ (>>= run)
           $ cmd "sh"
           & addArgs ["-c", "ls -l $HOME" :: String]
           & pure
@@ -143,7 +141,6 @@ spec = inM $ do
     it "can create cache home with just a nix directory" $ do
       StdoutTrimmed out <-
         failIfErr
-          $ (>>= run)
           $ cmd "sh"
           & addArgs ["-c", "find $XDG_CACHE_HOME" :: String]
           & pure
@@ -155,7 +152,6 @@ spec = inM $ do
         liftIO $ writeFile (cacheHome </> "file") ""
         StdoutTrimmed out <-
           failIfErr
-            $ (>>= run)
             $ cmd "sh"
             & addArgs ["-c", "find $XDG_CACHE_HOME" :: String]
             & pure
@@ -166,7 +162,6 @@ spec = inM $ do
       liftBaseOp_ (withModifiedEnvironment [("SOME_SECRET", "psst")]) $ do
         StdoutTrimmed out <-
           failIfErr
-            $ (>>= run)
             $ cmd "sh"
             & addArgs ["-c", "echo $SOME_SECRET" :: String]
             & pure
@@ -176,7 +171,6 @@ spec = inM $ do
     it "allows passing environment set with cradle through" $ do
       StdoutTrimmed out <-
         failIfErr
-          $ (>>= run)
           $ cmd "sh"
           & addArgs ["-c", "echo $FOO" :: String]
           & modifyEnvVar "FOO" (const $ Just "bar")
@@ -187,7 +181,6 @@ spec = inM $ do
     it "does not mount any netrc files if not specified" $ do
       () <-
         failIfErr
-          $ (>>= run)
           $ cmd "sh"
           & addArgs ["-c", "test ! -e $(nix --extra-experimental-features \"nix-command\" config show | grep netrc-file | awk '{ print $3 }')" :: String]
           & pure
@@ -201,7 +194,6 @@ spec = inM $ do
         nixConfig <- view #userNixConfig
         StdoutTrimmed out <-
           failIfErr
-            $ (>>= run)
             $ cmd "sh"
             & addArgs ["-c", "cat $(nix config show | grep netrc-file | awk '{ print $3 }')" :: String]
             & addNixConfigEnvironment nixConfig
@@ -217,7 +209,6 @@ spec = inM $ do
     it "allows modifying $PATH and $NIX_CONFIG" $ do
       StdoutRaw out <-
         failIfErr
-          $ (>>= run)
           $ cmd "sh"
           & addArgs ["-c", "echo $PATH ; echo $NIX_CONFIG" :: String]
           & modifyEnvVar "PATH" (const $ Just "/bin:/some-path")
@@ -229,7 +220,6 @@ spec = inM $ do
     it "has access to make TLS requests in the sandbox" $ do
       () <-
         failIfErr
-          $ (>>= run)
           $ cmd "curl"
           & addArgs ["https://garnix.io" :: String]
           & silenceStdout
@@ -245,13 +235,40 @@ spec = inM $ do
             writeFile (home </> ".config/nix/nix.conf") ""
           StdoutTrimmed out <-
             failIfErr
-              $ (>>= run)
               $ cmd "sh"
               & addArgs ["-c", "cd ~/.config/nix ; ls" :: String]
               & silenceStdout
               & pure
               & inNixSandbox [] Nothing
           out `shouldBeM` "nix.conf"
+
+    -- bwrap's --die-with-parent is tied to the OS thread that forked it, and one
+    -- capability makes the RTS retire surplus worker threads often. Forked from
+    -- an ordinary thread, a few of these die with -9 in most runs.
+    -- ponytail: probabilistic; a miss is a false pass, never a false failure.
+    it "is not killed when the RTS retires the worker thread that forked it" $ do
+      caps <- liftIO getNumCapabilities
+      let churn = forever (run (cmd "true") :: IO (ExitCode, StdoutRaw, StderrRaw))
+      codes <-
+        bracket_ (liftIO $ setNumCapabilities 1) (liftIO $ setNumCapabilities caps)
+          $ bracket (liftIO $ replicateM 32 (Async.async churn)) (liftIO . mapM_ Async.cancel)
+          $ \_ -> forConcurrently [1 .. 40 :: Int] $ \_ -> do
+            (code, StdoutRaw _, StderrRaw _) <-
+              cmd "sleep" & addArgs ["5" :: String] & pure & inNixSandbox [] Nothing
+            pure code
+      filter (/= ExitSuccess) codes `shouldBeM` []
+
+    -- The fork happens on a bound thread; cancelling the caller has to reach
+    -- it, or a build timeout would leave the sandbox running.
+    it "tears the sandbox down when the caller times out" $ do
+      marker :: Text <- liftIO $ ("30." <>) . show <$> randomRIO (100000 :: Int, 999999)
+      let running = do
+            StdoutRaw ps <- run (cmd "ps" & addArgs ["-eo", "args" :: String])
+            pure $ length $ filter (marker `T.isInfixOf`) $ T.lines $ cs ps
+      result :: Maybe ExitCode <-
+        timeout (fromSeconds @Int 1) $ cmd "sleep" & addArgs [marker] & pure & inNixSandbox [] Nothing
+      result `shouldBeM` Nothing
+      waitFor (fromSeconds @Int 5) $ running `shouldReturnM` 0
 
 failIfErr :: (MonadIO m, HasCallStack) => m (output, StderrRaw, ExitCode) -> m output
 failIfErr action = do

@@ -70,8 +70,7 @@ getConfigFromFlake = do
   nixConfig <- view #userNixConfig
   dir <- view #workingDir
   result <-
-    (>>= Cradle.run)
-      $ Cradle.cmd "nix"
+    Cradle.cmd "nix"
       & Cradle.addArgs @Text
         [ "eval",
           ".#garnix.config",

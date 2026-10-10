@@ -1,5 +1,6 @@
 module Garnix.Sandbox (inNixSandbox, SandboxAccessType (..)) where
 
+import Control.Concurrent.Async.Lifted (wait, withAsyncBound)
 import Cradle
 import Cradle.ProcessConfiguration
 import Data.List
@@ -10,8 +11,13 @@ import Garnix.Types (NetRcFile (..))
 import System.Directory (createDirectoryIfMissing, getCurrentDirectory)
 import System.Environment (getEnv)
 
--- A sandbox appropriate for nix commands.
-inNixSandbox :: [(FilePath, SandboxAccessType)] -> Maybe FilePath -> M ProcessConfiguration -> M ProcessConfiguration
+-- | Run a command in a sandbox appropriate for nix commands.
+--
+-- bwrap's @--die-with-parent@ fires when the OS thread that forked it exits, not
+-- when this process does (prctl(2), PR_SET_PDEATHSIG), and the threaded RTS
+-- retires surplus worker threads whenever it likes. Forking from a bound thread
+-- that lives until the sandbox exits keeps the RTS from SIGKILLing it mid-run.
+inNixSandbox :: (Output o) => [(FilePath, SandboxAccessType)] -> Maybe FilePath -> M ProcessConfiguration -> M o
 inNixSandbox extraSandboxPaths xdgCacheHome procConfigM = do
   procConfig <- procConfigM
   path <- liftIO $ getEnv "PATH"
@@ -26,11 +32,8 @@ inNixSandbox extraSandboxPaths xdgCacheHome procConfigM = do
     Just d -> pure d
   args <- argsForNixSandbox xdgCacheHome dir (extraSandboxPaths ++ netrcFile) env
   let oldCommand = executable procConfig : arguments procConfig
-  pure
-    $ procConfig
-      { executable = "bwrap",
-        arguments = args <> oldCommand
-      }
+      sandboxed = procConfig {executable = "bwrap", arguments = args <> oldCommand}
+  withAsyncBound (run sandboxed) wait
 
 data SandboxAccessType = TryReadOnly | ReadOnly | ReadWrite | LockFile
   deriving (Eq)

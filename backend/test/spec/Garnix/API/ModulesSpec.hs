@@ -9,6 +9,7 @@ import Data.Aeson.Lens
 import Data.Aeson.Types qualified as JSON
 import Data.Row ((.+), (.-), (.==))
 import Database.PostgreSQL.Typed
+import Garnix.API.Modules (moduleBranchName)
 import Garnix.DB qualified as DB
 import Garnix.DB.ModuleValues qualified as ModuleValues
 import Garnix.Duration
@@ -25,6 +26,15 @@ import Test.Hspec hiding (shouldReturn, shouldThrow)
 
 spec :: Spec
 spec = inM . beforeM_ truncateDBM . aroundM_ suppressLogsWhenPassing . context "ModulesSpec" $ do
+  context "moduleBranchName" $ do
+    forM_ ["fZk//3+gARg=", "//////////8="] $ \suffix ->
+      it ("creates a valid Git branch from " <> cs suffix) $ do
+        exit <-
+          Cradle.run $ Cradle.cmd "git"
+            & Cradle.addArgs ["check-ref-format", "--branch", getBranch $ moduleBranchName suffix]
+            & Cradle.silenceStdout
+        exit `shouldBeM` Cradle.ExitSuccess
+
   context "GET /api/modules" $ do
     it "returns 401 Unauthorized when the user is not logged in" $ withServer $ \server -> do
       res <- server.get "/api/modules"

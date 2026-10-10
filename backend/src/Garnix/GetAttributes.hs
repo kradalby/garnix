@@ -28,8 +28,7 @@ subAttrs repoOwner flakeDir attr = do
   res <-
     withPoolM nixEvalPool repoOwner $ do
       (exitCode, StdoutTrimmed stdout, StderrRaw stderr) <-
-        (>>= run)
-          $ cmd "nix"
+        cmd "nix"
           & addArgs args
           & addNixConfigEnvironment nixConfig
           & setWorkingDir curDir
@@ -55,8 +54,7 @@ ifIsAttr repoOwner flakeDir attr = do
   res <-
     withPoolM nixEvalPool repoOwner $ do
       (exitCode, StdoutTrimmed stdout, StderrRaw stderr) <-
-        (>>= run)
-          $ cmd "nix"
+        cmd "nix"
           & addArgs args
           & addNixConfigEnvironment nixConfig
           & setWorkingDir curDir

@@ -298,8 +298,7 @@ evaluateAppExecPath flakeDir repoConfig build = do
   let appDerivation = "a: [{ run = a.program; }]"
   attr <- localAttr flakeDir . addNixosExtension . attribute $ build
   (exitCode, stdout, Cradle.StderrRaw stderr) <-
-    (>>= Cradle.run)
-      $ Cradle.cmd "comment"
+    Cradle.cmd "comment"
       & Cradle.addArgs
         [ buildComment build,
           "--",

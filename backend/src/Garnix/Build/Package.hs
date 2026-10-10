@@ -70,8 +70,7 @@ getPersistenceName flakeDir b = do
   if isNixos && succeeded
     then do
       (exit, StdoutRaw s) <-
-        (>>= run)
-          $ cmd "nix"
+        cmd "nix"
           & addArgs
             [ "eval",
               cs flakeDir' <> "#nixosConfigurations." <> cs (b ^. package),
@@ -131,8 +130,7 @@ discoverDeploySpecJson flakeDir build = do
   nixConfig <- view #userNixConfig
   flakeDir' <- safeGetAbsoluteFlakeDir flakeDir
   (exit, StdoutRaw out) <-
-    (>>= run)
-      $ cmd "nix"
+    cmd "nix"
       & addArgs
         [ "eval",
           cs flakeDir' <> "#nixosConfigurations." <> cs (build ^. package),
@@ -306,7 +304,6 @@ runNixBuild runReporter cacheDir workingDir build drvPath = do
       $ withUtf8LinesStream processor
       $ \logHandle ->
         timeout buildTimeoutDuration
-          $ (>>= run)
           $ cmd "comment"
           & addArgs
             [ buildComment build,

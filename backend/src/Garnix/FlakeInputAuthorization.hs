@@ -36,8 +36,7 @@ checkAuthorization flakeDir repoConfig commitInfo = do
   curDir <- view #workingDir
   flakeDir' <- safeGetAbsoluteFlakeDir flakeDir
   (exitCode, StdoutTrimmed stdout, StderrRaw stderr) <-
-    (>>= run)
-      $ cmd "nix"
+    cmd "nix"
       & addArgs ["flake", "metadata", "--json", flakeDir']
       & addNixConfigEnvironment nixConfig
       & setWorkingDir curDir
