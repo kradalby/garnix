@@ -333,7 +333,13 @@ spec = inM $ do
       GH.withLocalRepo ghState "owner" "repo" identity defaultCommitInfo (const (pure ())) $ \commitInfo -> do
         result <- try $ Checkout.runWithCheckout remote commitInfo (const (pure ()))
         case result of
-          Left ErrorWithContext {err = RunProcessError {stdErr}} -> stdErr `shouldMatchRegexp` "error: unable to download 'https://api.github.com/repos/garnix-io/test-module/tarball/0000000000000000000000000000000000000001'"
+          Left ErrorWithContext {err = RunProcessError {arguments, stdErr}} -> do
+            arguments
+              `shouldContainM` [ "--override-input",
+                                 "testModule",
+                                 "github:garnix-io/test-module?rev=0000000000000000000000000000000000000001"
+                               ]
+            stdErr `shouldMatchRegexp` "while fetching the input 'github:garnix-io/test-module/0000000000000000000000000000000000000001'"
           Left ErrorWithContext {err} -> liftIO $ expectationFailure $ "Expected RunProcessError but got " <> cs (Garnix.Prelude.show err)
           _ -> liftIO $ expectationFailure $ "Expected Left RunProcessError but got " <> cs (Garnix.Prelude.show result)
 
