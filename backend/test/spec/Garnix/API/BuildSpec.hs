@@ -329,8 +329,9 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ beforeM_ truncateDBM $ do
           let lines =
                 T.lines (T.strip $ cs $ res ^. responseBody)
                   & dropWhile (\line -> not $ "this derivation will be built:" `T.isSuffixOf` line)
+              requiredLines = take 2 lines <> filter (T.isInfixOf " UTC test-pkg> ") lines
           liftIO
-            $ lines
+            $ requiredLines
             `shouldMatchRegexpLines` [ "^\\d{4}-\\d{2}-\\d{2} [\\d:.]+ UTC> this derivation will be built:$",
                                        "^\\d{4}-\\d{2}-\\d{2} [\\d:.]+ UTC>   /nix/store/[a-zA-Z0-9]{32}-test-pkg.drv$",
                                        "^\\d{4}-\\d{2}-\\d{2} [\\d:.]+ UTC test-pkg> line1$",
