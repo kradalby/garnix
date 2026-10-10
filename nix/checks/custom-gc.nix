@@ -17,7 +17,7 @@ let
     procps = fixtures;
   };
   script =
-    useNixHeuristicGc:
+    useNixHeuristicGc: upperLimitPercent:
     let
       evaluation = flakeInputs.nixpkgs.lib.nixosSystem {
         system = pkgs.stdenv.hostPlatform.system;
@@ -33,7 +33,7 @@ let
               enableTimer = true;
               targetPercent = 90;
               maxIterations = 3;
-              inherit useNixHeuristicGc;
+              inherit upperLimitPercent useNixHeuristicGc;
             };
           }
         ];
@@ -42,6 +42,6 @@ let
     evaluation.config.systemd.services.custom-gc.script;
 in
 pkgs.runCommand "custom-gc-test" { nativeBuildInputs = [ pkgs.python3 ]; } ''
-  python3 ${./custom-gc-test.py} ${script false} ${script true}
+  python3 ${./custom-gc-test.py} ${script false null} ${script true null} ${script false 95}
   touch $out
 ''

@@ -5,7 +5,8 @@ import sys
 import tempfile
 import unittest
 
-scripts = sys.argv[1:]
+scripts = sys.argv[1:3]
+upper_threshold_script = sys.argv[3]
 sys.argv = sys.argv[:1]
 
 
@@ -66,6 +67,18 @@ class GarbageCollectionTest(unittest.TestCase):
         for script in scripts:
             with self.subTest(script=script):
                 self.run_gc(script, [usage(70, 70000, 100, 999)], 0, 0, zfs=True)
+
+    def test_upper_threshold_collects_inode_pressure_without_zfs(self):
+        self.run_gc(upper_threshold_script, [usage(70, 70000, 96, 960), usage(70, 70000, 89, 890)], 0, 1)
+
+    def test_upper_threshold_defers_collection_below_trigger(self):
+        self.run_gc(upper_threshold_script, [usage()], 0, 0)
+
+    def test_upper_threshold_ignores_zfs_inode_usage(self):
+        self.run_gc(upper_threshold_script, [usage(70, 70000, 96, 960)], 0, 0, zfs=True)
+
+    def test_upper_threshold_collects_disk_pressure(self):
+        self.run_gc(upper_threshold_script, [usage(96, 96000), usage(89, 89000)], 0, 1)
 
 
 unittest.main()
