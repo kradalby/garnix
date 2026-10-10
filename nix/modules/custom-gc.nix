@@ -52,7 +52,15 @@ let
         ${lib.getExe' config.nix.package "nix-env"} \
           --profile /nix/var/nix/profiles/system \
           --delete-generations +${toString cfg.numOfGenerationsToKeep}
+        iterations=0
         while should_run_gc; do
+          if [[ $iterations -ge ${toString cfg.maxIterations} ]]; then
+            echo "GC still above target after $iterations attempts" >&2
+            exit 1
+          fi
+          iterations=$((iterations+1))
+          used_before=$(df /nix/store --output=used | tr -dc '0-9')
+          inodes_before=$(df /nix/store --output=iused | tr -dc '0-9')
           echo "Running gc"
           if [[ $DISK_USAGE -ge $targetPercent ]]; then
             used=$(df /nix/store --output=used | tr -dc '0-9')
@@ -74,6 +82,13 @@ let
             else
               "nix-collect-garbage --max-freed \"$to_gc\" --keep-going"
           }
+          used_after=$(df /nix/store --output=used | tr -dc '0-9')
+          inodes_after=$(df /nix/store --output=iused | tr -dc '0-9')
+          if should_run_gc && [[ $used_after -ge $used_before ]] &&
+            [[ -n "$IS_ZFS" || ''${inodes_after:-0} -ge ''${inodes_before:-0} ]]; then
+            echo "GC made no progress; remaining store paths may be rooted" >&2
+            exit 1
+          fi
         done
         echo "Done"
       else
@@ -129,6 +144,11 @@ in
       description = "Use https://github.com/risicle/nix-heuristic-gc for gc'ing";
       default = false;
     };
+    maxIterations = lib.mkOption {
+      type = lib.types.ints.positive;
+      description = "Maximum collection attempts before failing above the target usage";
+      default = 16;
+    };
     targetPercent = lib.mkOption {
       type = lib.types.int;
       description = "Gc'ing will aim for having the disk usage be below this percentage";
@@ -155,6 +175,7 @@ in
               IOSchedulingClass = "idle";
               Type = "oneshot";
               User = "root";
+              TimeoutStartSec = "3h";
             };
             script = lib.getExe customGCScript;
           };

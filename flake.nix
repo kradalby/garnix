@@ -145,7 +145,10 @@
         }) (namespace "backend" backend.commands);
 
         checks =
-          namespace "backend" backend.checks
+          lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            custom-gc = import ./nix/checks/custom-gc.nix subDirInputs;
+          }
+          // namespace "backend" backend.checks
           // namespace "frontend" frontend.checks
           // namespace "frontend" (namespace "ageWasm" frontend-age-wasm.checks)
           // namespace "provisioner" provisioner.checks
