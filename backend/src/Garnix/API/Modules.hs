@@ -1,12 +1,14 @@
 module Garnix.API.Modules
   ( ModulesAPI,
     modulesAPI,
+    moduleBranchName,
   )
 where
 
 import Control.Lens
 import Data.ByteString (ByteString)
 import Data.Row
+import Data.Text qualified as T
 import Garnix.Build qualified as Build
 import Garnix.Build.Checkout qualified as Checkout
 import Garnix.Build.Module qualified as Build.Module
@@ -102,7 +104,7 @@ createPullRequest user = do
       commitInfo <- Build.Module.getCommitInfo (user ^. githubLogin) repoAndModuleValues
       withSpan commitInfo $ do
         let baseBranch = maybe (Branch "main") identity $ commitInfo ^. branch
-        newBranch <- Branch . ("garnix-modules-" <>) <$> randomBase64 8
+        newBranch <- moduleBranchName <$> randomBase64 8
 
         pushNewBranch repoAndModuleValues commitInfo baseBranch newBranch
 
@@ -128,6 +130,9 @@ createPullRequest user = do
             _pullRequestHeadBranch = newBranch,
             _pullRequestBaseBranch = baseBranch
           }
+
+moduleBranchName :: Text -> Branch
+moduleBranchName = Branch . ("garnix-modules-" <>) . T.replace "/" "_"
 
 getFlake :: User -> M (Headers '[Header "Content-Disposition" Text] ByteString)
 getFlake user = do
