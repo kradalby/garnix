@@ -109,6 +109,7 @@ let
         ];
         text = ''
           ${lib.toShellVar "upperLimitPercent" cfg.upperLimitPercent}
+          IS_ZFS=$(mount -t zfs | grep "on /nix" || true)
           DISK_USAGE=$(df /nix/store --output=pcent | tr -dc '0-9')
           INODE_USAGE=$(df /nix/store --output=ipcent | tr -dc '0-9')
           echo "Disk usage at $DISK_USAGE %"
