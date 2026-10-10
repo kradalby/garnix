@@ -1,6 +1,7 @@
 module Garnix.Nix.StorePathSpec where
 
 import Control.Lens ((<&>), (^?!))
+import Control.Monad.Trans.Control (liftBaseOp_)
 import Cradle
 import Data.Aeson (fromJSON)
 import Data.Aeson.Lens (key, nth, _String)
@@ -17,6 +18,7 @@ import Garnix.TestHelpers.Monad
 import Garnix.Types
 import System.Posix.Files (readSymbolicLink)
 import Test.Hspec
+import Test.Mockery.Environment (withModifiedEnvironment)
 
 spec :: Spec
 spec = inM $ aroundM_ suppressLogsWhenPassing $ do
@@ -44,6 +46,26 @@ spec = inM $ aroundM_ suppressLogsWhenPassing $ do
             ''];
           }
         |]
+
+  describe "getClosure" $ do
+    let missingPath = StorePath (StoreHash "00000000000000000000000000000000") "missing-closure-for-test"
+
+    it "ignores the missing output of a failed build" $ do
+      getClosure missingPath `shouldReturnM` Nothing
+
+    it "ignores missing outputs when Nix emits configuration warnings" $ do
+      liftBaseOp_ (withModifiedEnvironment [("NIX_CONFIG", "garnix-test-unknown-setting = true")]) $ do
+        getClosure missingPath `shouldReturnM` Nothing
+
+    it "returns the closure of a successful build" $ do
+      StdoutTrimmed json <-
+        run
+          $ cmd "nix"
+          & addArgs ["build", "--expr", testDerivation, "--json"]
+          & nixConfDefaults
+      let drvPath = json ^?! nth 0 . key "drvPath" . _String . to mkDrvPath
+      storePath <- _getOutputs drvPath <&> (Map.! "out")
+      getClosure storePath `shouldReturnM` Just [storePath]
 
   describe "_getOutput" $ do
     it "fetch storepath from a drv" $ do

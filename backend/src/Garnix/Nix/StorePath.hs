@@ -101,5 +101,5 @@ getClosure drvPath = do
         Right storePath -> pure storePath
       pure $ Just paths
     Left (ErrorWithContext {err = RunProcessError {stdErr}})
-      | "error: path '" `T.isPrefixOf` stdErr && "' is not valid\n" `T.isSuffixOf` stdErr -> pure Nothing
+      | ("error: path '" <> Nix.getStorePath drvPath <> "' is not valid") `elem` T.lines stdErr -> pure Nothing
     Left e -> throwError e
